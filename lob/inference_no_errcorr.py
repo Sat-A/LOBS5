@@ -1303,13 +1303,13 @@ def sample_new(
             # get date from filename
             date = ds.get_date(i)
             
-            jnp.set_printoptions(threshold=sys.maxsize)
-            with open(save_folder+f'/tokens/{stock_symbol}_{date}_real_{i}.txt', 'w') as f:
-                print( onp.reshape(msg_tok_eval,(-1,Message_Tokenizer.MSG_LEN)), file=f)
+            # jnp.set_printoptions(threshold=sys.maxsize)
+            # with open(save_folder+f'/tokens/{stock_symbol}_{date}_real_{i}.txt', 'w') as f:
+            #     print( onp.reshape(msg_tok_eval,(-1,Message_Tokenizer.MSG_LEN)), file=f)
 
-            with open(save_folder+f'/tokens/{stock_symbol}_{date}_gen_{i}.txt', 'w') as f:
-                print( msg_tok, file=f)
-            jnp.set_printoptions()
+            # with open(save_folder+f'/tokens/{stock_symbol}_{date}_gen_{i}.txt', 'w') as f:
+            #     print( msg_tok, file=f)
+            # jnp.set_printoptions()
             
             # input / cond data
             msg_to_lobster_format(cond_msg).to_csv(

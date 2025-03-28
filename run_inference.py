@@ -79,8 +79,9 @@ if __name__ == "__main__":
 
 
     if run_args.stock == 'GOOG':
-        data_dir = '/data1/sascha/data/lobster_preproced/GOOG2019/'
-        ckpt_path='/data1/sascha/LOBS5/checkpoints/solar-glade-442_kx0b24ws/'
+        data_dir = '/data1/sascha/data/GOOG/preprocessed/GOOG2019'
+        ckpt_path='/data1/sascha/data/checkpoints/olive-blaze-463_9eq56l8n/'
+        save_dir='/data1/sascha/data/GOOG/benchmark_data/evalsequences/s5/scaled_olive'
     elif run_args.stock == 'INTC':
         raise NotImplementedError("Nothing trained for INTC yet")
     elif run_args.stock == 'TSLA':
@@ -90,7 +91,7 @@ if __name__ == "__main__":
 
     ##################################################
 
-    n_gen_msgs = 1000  #500 # how many messages to generate into the future
+    n_gen_msgs = 500  #500 # how many messages to generate into the future
     n_messages_conditional = 0
     n_eval_messages = n_gen_msgs  # how many to load from dataset 
     eval_seq_len = (n_eval_messages-1) * Message_Tokenizer.MSG_LEN
@@ -133,7 +134,7 @@ if __name__ == "__main__":
     ckpt = load_checkpoint(
         new_train_state,
         ckpt_path,
-        step=90,
+        step=18,
         train=False,
     )
     state = ckpt['model']
@@ -148,17 +149,6 @@ if __name__ == "__main__":
     ##################################################
 
     import lob.evaluation as eval
-
-    # n_gen_msgs = 100  #500 # how many messages to generate into the future
-    # n_messages = 500
-    # n_eval_messages = 100  # how many to load from dataset 
-    # eval_seq_len = n_eval_messages * Message_Tokenizer.MSG_LEN
-
-    # data_levels = 10
-    # sim_book_levels = 20 # 10  # order book simulator levels
-    # sim_queue_len = 100  # per price in sim, how many orders in queue
-
-    # n_vol_series = 500  # how many book volume series model uses as input
 
     msg_files = sorted(glob(str(data_dir) + '/*message*.npy'))
     book_files = sorted(glob(str(data_dir) + '/*book*.npy'))
@@ -201,7 +191,7 @@ if __name__ == "__main__":
 
 
 
-    n_samples = 512
+    n_samples = 1024
     batch_size = 32
 
     # m_seq_gen, b_seq_gen, msgs_decoded, l2_book_states, num_errors = inference.sample_new(
@@ -219,7 +209,7 @@ if __name__ == "__main__":
         args.batchnorm,
         v.ENCODING,
         run_args.stock,
-        save_folder='/data1/sascha/data/generated_data/post_debug',
+        save_folder=save_dir,
         sample_top_n=sample_top_n,
         args=args,
         conditional= False,
