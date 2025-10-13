@@ -1,0 +1,53 @@
+# ========================================
+# 完整的GPU训练环境设置步骤
+# 请在交互式shell中逐行复制粘贴运行
+# ========================================
+
+# 1. 检查当前环境
+echo "=== Step 1: Check current environment ==="
+which python
+echo "CONDA_PREFIX: $CONDA_PREFIX"
+module list 2>&1 | grep -i cuda
+
+# 2. 确保在lobs5环境和cuda模块已加载
+echo -e "\n=== Step 2: Load environment if needed ==="
+# 如果上面显示不在lobs5环境，运行：
+# source ~/miniforge3/etc/profile.d/conda.sh
+# conda activate lobs5
+# module load cuda/12.6
+
+# 3. 检查NVIDIA库文件是否存在
+echo -e "\n=== Step 3: Check NVIDIA libraries ==="
+ls $CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cusparse/lib/libcusparse*.so* 2>/dev/null | head -1
+ls $CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cublas/lib/libcublas*.so* 2>/dev/null | head -1
+ls $CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cudnn/lib/libcudnn*.so* 2>/dev/null | head -1
+
+# 4. 设置LD_LIBRARY_PATH（分步骤）
+echo -e "\n=== Step 4: Setting LD_LIBRARY_PATH ==="
+
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cusparse/lib:$LD_LIBRARY_PATH
+echo "Added cusparse"
+
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cublas/lib:$LD_LIBRARY_PATH
+echo "Added cublas"
+
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cudnn/lib:$LD_LIBRARY_PATH
+echo "Added cudnn"
+
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cufft/lib:$LD_LIBRARY_PATH
+echo "Added cufft"
+
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cusolver/lib:$LD_LIBRARY_PATH
+echo "Added cusolver"
+
+# 5. 验证LD_LIBRARY_PATH设置
+echo -e "\n=== Step 5: Verify LD_LIBRARY_PATH ==="
+echo $LD_LIBRARY_PATH | tr ':' '\n' | grep nvidia | head -10
+
+# 6. 测试JAX GPU检测
+echo -e "\n=== Step 6: Test JAX GPU detection ==="
+python -c "import jax; print(f'JAX version: {jax.__version__}'); print(f'Devices: {jax.devices()}')"
+
+# 7. 如果上面成功显示CudaDevice，运行训练
+echo -e "\n=== Step 7: Run training (if GPU detected above) ==="
+# python run_train.py --C_init=trunc_standard_normal --batchnorm=True --bidirectional=False --blocks=8 --bsz=16 --d_model=32 --dataset=lobster-prediction --dir_name=./data/train --dt_global=False --epochs=1 --jax_seed=1919 --lr_factor=1 --n_layers=6 --opt_config=standard --p_dropout=0.0 --ssm_lr_base=0.001 --ssm_size_base=32 --warmup_end=1 --weight_decay=0.05 --use_book_data=False --masking=causal

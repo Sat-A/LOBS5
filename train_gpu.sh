@@ -7,8 +7,12 @@ conda activate lobs5
 # Load CUDA module
 module load cuda/12.6
 
-# Set library paths for NVIDIA libraries installed via pip
-export LD_LIBRARY_PATH=$(find $CONDA_PREFIX/lib/python3.11/site-packages/nvidia -name lib -type d 2>/dev/null | tr '\n' ':')$LD_LIBRARY_PATH
+# Set library paths for NVIDIA libraries (explicit paths for reliability)
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cusparse/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cublas/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cudnn/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cufft/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cusolver/lib:$LD_LIBRARY_PATH
+
+# Verify GPU is available
+echo "Checking GPU..."
+python -c "import jax; print(f'JAX Devices: {jax.devices()}')"
 
 # Run training
 python run_train.py \
