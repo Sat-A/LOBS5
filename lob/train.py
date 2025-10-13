@@ -106,7 +106,7 @@ def train(args):
         enable_async_checkpointing=False,
     )
     ckpt_mgr = ocp.CheckpointManager(
-        os.path.abspath(f'checkpoints/{run.name}_{run.id}/'),
+        os.path.abspath(f'checkpoints/lobs5_training_{args.jax_seed}/'),
         # ocp.Checkpointer(ocp.PyTreeCheckpointHandler()),
         # ocp.Checkpointer(ocp.StandardCheckpointHandler()),
         item_names=('state', 'metadata'),

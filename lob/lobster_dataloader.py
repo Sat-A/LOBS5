@@ -554,7 +554,7 @@ class LOBSTER(SequenceDataset):
     _name_ = "lobster"
     l_output = 0
 
-    _collate_arg_names = ['book_data'] #['book_data'] #['timesteps']
+    _collate_arg_names = [] # Will be set dynamically based on use_book_data
 
     @classmethod
     def _collate_fn(cls, batch, *args, **kwargs):
@@ -602,8 +602,10 @@ class LOBSTER(SequenceDataset):
             #       can this be variable depending on the dataset?
             book_files = sorted(glob(str(self.data_dir) + '/*book*.npy'))
             assert len(message_files) == len(book_files)
+            self._collate_arg_names = ['book_data']
         else:
             book_files = None
+            self._collate_arg_names = []
         # raw message files
 
         n_test_files = max(1, int(len(message_files) * self.test_split))

@@ -29,6 +29,8 @@ class LobPredModel(nn.Module):
             step_rescale  (float32):  allows for uniformly changing the timescale parameter,
                                     e.g. after training on a different resolution for
                                     the speech commands benchmark
+            use_embed_layer (bool):  use embedding layer for integer token inputs
+            vocab_size  (int32):    vocabulary size for embedding layer
     """
     ssm: nn.Module
     d_output: int
@@ -43,6 +45,8 @@ class LobPredModel(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
+    use_embed_layer: bool = True
+    vocab_size: int = 12011
 
     def setup(self):
         """
@@ -59,6 +63,8 @@ class LobPredModel(nn.Module):
                             batchnorm=self.batchnorm,
                             bn_momentum=self.bn_momentum,
                             step_rescale=self.step_rescale,
+                            use_embed_layer=self.use_embed_layer,
+                            vocab_size=self.vocab_size,
                                         )
         self.decoder = nn.Dense(self.d_output)
 
