@@ -405,11 +405,6 @@ class LOBSTER_Dataset(Dataset):
             else:
                 ret_tuple += (X_raw,)
 
-        # Debug output (only for first call)
-        if not hasattr(self, '_debug_printed'):
-            print(f"[DEBUG] LOBSTER_Dataset.__getitem__(): returning {len(ret_tuple)} items, use_book_data={self.use_book_data}, return_raw_msgs={self.return_raw_msgs}")
-            self._debug_printed = True
-
         return ret_tuple
 
     def _add_to_cache(self, file_idx):
@@ -573,9 +568,6 @@ class LOBSTER(SequenceDataset):
         """
         x, y, *z = zip(*batch)
 
-        # Debug output
-        print(f"[DEBUG] _collate_fn: batch[0] has {len(batch[0])} items, z has {len(z)} items, _collate_arg_names={cls._collate_arg_names} (len={len(cls._collate_arg_names)})")
-
         x = cls._collate(x, *args, **kwargs)
         y = cls._collate(y)
         z = [cls._collate(z_) for z_ in z]
@@ -622,9 +614,6 @@ class LOBSTER(SequenceDataset):
                 self.__class__._collate_arg_names = ['raw_msgs']
             else:
                 self.__class__._collate_arg_names = []
-
-        # Debug output
-        print(f"[DEBUG] LOBSTER.setup(): use_book_data={self.use_book_data}, return_raw_msgs={self.return_raw_msgs}, _collate_arg_names={self.__class__._collate_arg_names}")
 
         # raw message files
 
