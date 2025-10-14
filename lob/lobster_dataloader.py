@@ -308,6 +308,19 @@ class LOBSTER_Dataset(Dataset):
         # count total number of sequences only once
         self._len = int(self._seqs_cumsum[-1])
 
+        # Set _collate_arg_names for parent LOBSTER class
+        # This needs to be done here so worker processes get the correct value
+        if self.use_book_data:
+            if self.return_raw_msgs:
+                LOBSTER._collate_arg_names = ['book_data', 'raw_msgs', 'book_l2_init']
+            else:
+                LOBSTER._collate_arg_names = ['book_data']
+        else:
+            if self.return_raw_msgs:
+                LOBSTER._collate_arg_names = ['raw_msgs']
+            else:
+                LOBSTER._collate_arg_names = []
+
     def _set_book_dims(self):
         if self.use_book_data:
             if self.book_transform:
@@ -602,18 +615,9 @@ class LOBSTER(SequenceDataset):
             #       can this be variable depending on the dataset?
             book_files = sorted(glob(str(self.data_dir) + '/*book*.npy'))
             assert len(message_files) == len(book_files)
-            # Set collate arg names based on what's actually returned
-            # Use __class__ to set the class variable, not instance variable
-            if self.return_raw_msgs:
-                self.__class__._collate_arg_names = ['book_data', 'raw_msgs', 'book_l2_init']
-            else:
-                self.__class__._collate_arg_names = ['book_data']
+            # Note: _collate_arg_names is now set in LOBSTER_Dataset.__init__
         else:
             book_files = None
-            if self.return_raw_msgs:
-                self.__class__._collate_arg_names = ['raw_msgs']
-            else:
-                self.__class__._collate_arg_names = []
 
         # raw message files
 
