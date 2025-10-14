@@ -297,11 +297,8 @@ def create_train_state(model_cls,
         state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
 
     # keep copy of state on each device
-    if num_devices > 1:
-        state = jax_utils.replicate(state)#, devices=global_devices)
-    else:
-        # For single device, manually add device dimension for pmap compatibility
-        state = jax.tree_util.tree_map(lambda x: np.expand_dims(x, axis=0), state)
+    # Always use replicate for pmap compatibility
+    state = jax_utils.replicate(state)#, devices=global_devices)
     return state
 
 def get_slices(dims):

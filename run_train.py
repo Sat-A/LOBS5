@@ -8,13 +8,13 @@ import os
 # os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 
 # TODO: change this if num_devices changes (is less than all of the available ones)
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
+# CUDA_VISIBLE_DEVICES will be set after parsing args based on num_devices
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 # os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".99"
 
 import argparse
 from s5.utils.util import str2bool
-from lob.dataloading import Datasets
 
 
 if __name__ == "__main__":
@@ -33,7 +33,7 @@ if __name__ == "__main__":
 						help="wandb entity name, e.g. username")
 	parser.add_argument("--dir_name", type=str, default='./data',
 						help="name of directory where data is cached")
-	parser.add_argument("--dataset", type=str, choices=Datasets.keys(),
+	parser.add_argument("--dataset", type=str, choices=['lobster-prediction'],
 						default='lobster-prediction',
 						help="dataset name")
 	parser.add_argument("--masking", type=str, choices={'causal', 'random'},
@@ -144,6 +144,15 @@ if __name__ == "__main__":
 
 	args = parser.parse_args()
 
+	# Set CUDA_VISIBLE_DEVICES based on num_devices before importing JAX
+	if hasattr(args, 'num_devices') and args.num_devices > 0:
+		visible_devices = ",".join(str(i) for i in range(args.num_devices))
+		os.environ["CUDA_VISIBLE_DEVICES"] = visible_devices
+		print(f"[*] Setting CUDA_VISIBLE_DEVICES={visible_devices}")
+	else:
+		# Default to single device if not specified
+		os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+		print("[*] Setting CUDA_VISIBLE_DEVICES=0 (default)")
 
 	import torch
 	torch.multiprocessing.set_start_method('spawn')
