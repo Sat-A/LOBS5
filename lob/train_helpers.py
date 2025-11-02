@@ -507,7 +507,7 @@ def train_epoch(
             #     batchnorm,
             #     init_hiddens)
 
-            print("Gets to train")
+            # print("Gets to train")
             state, loss, ce, logits = train_step(
                 state,
                 drop_rng,
@@ -519,7 +519,7 @@ def train_epoch(
             )
             if debug_profiler:
                 loss.block_until_ready()
-            print("completes train step")
+            # print("completes train step")
             # if (batch_idx==0) & (epoch%100==0):
             #     np.set_printoptions(threshold=sys.maxsize)
             #     with open(f'/data1/sascha/data/losses/losses_batch_{batch_idx}_training.txt', 'w') as f:

@@ -181,9 +181,6 @@ def train(args):
 
 
         #Pass an initial hidden state to be used in case of the 'RNN' forward pass being used. 
-
-
-
         state, train_loss,ce_by_tok ,step = train_epoch(state,
                                               skey,
                                               #model_cls,
