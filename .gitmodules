@@ -1,3 +1,3 @@
-[submodule "AlphaTrade"]
-	path = AlphaTrade
+[submodule "Alphatrade"]
+	path = Alphatrade
 	url = https://github.com/KangOxford/AlphaTrade.git
