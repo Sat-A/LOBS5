@@ -190,3 +190,10 @@ vivid.tar.gz
 ._vivid-darkness-145_w0meodq9
 17to19.tar.gz
 honest-oath.tar.gz
+
+
+.vscode-server/*
+.*/*
+.bash_history
+.gitconfig
+.netrc
