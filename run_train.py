@@ -8,13 +8,13 @@ import os
 # os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 
 # TODO: change this if num_devices changes (is less than all of the available ones11)
-os.environ["TF_CPP_MIN_LOG_LEVEL"]="0"
-os.environ["NCCL_DEBUG"]="INFO"
+# os.environ["TF_CPP_MIN_LOG_LEVEL"]="0"
+# os.environ["NCCL_DEBUG"]="INFO"
 
 #os.environ["TF_CPP_MIN_LOG_LEVEL"] = "0"
 # os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".99"
 if __name__ == "__main__":
-	os.environ["CUDA_VISIBLE_DEVICES"] = "3,6"
+	pass
 else:
 	# Forces all generated worker processes to not run on GPU.
 	#  Required at this high level, because the init func in the 
@@ -26,7 +26,7 @@ from lob.dataloading import Datasets
 if __name__ == "__main__":
 	import argparse
 	from s5.utils.util import str2bool
-	os.environ["CUDA_VISIBLE_DEVICES"] = "3,6"
+	os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
 	os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]="0.9"
 	os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true"
 
@@ -38,11 +38,11 @@ if __name__ == "__main__":
 
 	parser.add_argument("--USE_WANDB", type=str2bool, default=True,
 						help="log with wandb?")
-	parser.add_argument("--wandb_project", type=str, default="LOBS5",
+	parser.add_argument("--wandb_project", type=str, default="LOBS5v2",
 						help="wandb project name")
 	parser.add_argument("--wandb_entity", type=str, default="sasrey",
 						help="wandb entity name, e.g. username")
-	parser.add_argument("--dir_name", type=str, default='./data',
+	parser.add_argument("--dir_name", type=str, default='./data/LOBS5v2Cached/',
 						help="name of directory where data is cached")
 	parser.add_argument("--dataset", type=str, choices=Datasets.keys(),
 						default='lobster-prediction',
