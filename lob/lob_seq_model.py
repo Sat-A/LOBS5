@@ -547,7 +547,7 @@ class PaddedLobPredModel(nn.Module):
         #Removed the pooling to enable each token to be a target,
         #  not just a random one in the last message. 
 
-        jax.debug.print("x output shape {}, 1st five: \n {}",x.shape,x[:5,:5])
+        # jax.debug.print("x output shape {}, 1st five: \n {}",x.shape,x[:5,:5])
 
         if self.mode in ["pool"]:
             x = jnp.mean(x, axis=0)
