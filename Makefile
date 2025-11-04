@@ -1,7 +1,7 @@
 NVCC_RESULT := $(shell which nvcc 2> NULL; rm NULL)
 NVCC_TEST := $(notdir $(NVCC_RESULT))
 ifeq ($(NVCC_TEST),nvcc)
-GPUS=--gpus '"device=6"'
+GPUS=--gpus '"device=6,7"'
 else
 GPUS=
 endif
@@ -27,7 +27,7 @@ BASIC_FLAGS=$(GPUS) $(BASE_FLAGS)
 DOCKER_IMAGE_NAME = lobs5_sascha
 IMAGE = $(DOCKER_IMAGE_NAME):latest
 DOCKER_RUN=docker run $(RUN_FLAGS) $(IMAGE)
-DOCKER_RUN_BASIC=docker run --gpus "device=$(gpu)" $(BASE_FLAGS) $(IMAGE)
+DOCKER_RUN_BASIC=docker run --gpus '"device=$(gpu)"' $(BASE_FLAGS) $(IMAGE)
 USE_CUDA = $(if $(GPUS),true,false)
 ID = $(shell id -u)
 
@@ -43,7 +43,7 @@ test:
 	$(DOCKER_RUN) /bin/bash -c "pytest ./tests/"
 
 train_small:
-	$(DOCKER_RUN_BASIC) /bin/bash -c "sh bin/run_experiments/run_lobster_padded_small_data.sh"
+	$(DOCKER_RUN_BASIC) /bin/bash -c "sh bin/run_experiments/run_lobster_padded_small.sh"
 
 inference:
 	$(DOCKER_RUN_BASIC) /bin/bash -c "python3 ./run_inference.py"
