@@ -40,6 +40,8 @@ submodule_name = 'AlphaTrade'
     os.path.split(os.path.abspath(__file__))[0])
 sys.path.append(os.path.join(parent_folder_path, submodule_name))
 from gymnax_exchange.jaxob.jorderbook import OrderBook, LobState
+from gymnax_exchange.jaxob.jaxob_config import JAXLOB_Configuration
+import gymnax_exchange.jaxob.jaxob_constants as cst
 import gymnax_exchange.jaxob.JaxOrderBookArrays as job
 # from gym_exchange.environment.base_env.assets.action import OrderIdGenerator
 
@@ -166,7 +168,7 @@ def get_sim(
     """
 
     # reset simulator : args are (nOrders, nTrades)
-    sim = OrderBook()
+    sim = OrderBook(cfg=JAXLOB_Configuration(cancel_mode=cst.CancelMode.CANCEL_UNIFORM_AND_LARGE.value))
     #Set the ns component of the start time to 0 to ensure that init messages are before first message.
     # Only edge case is if first message and init are 0 ns - unlikely. 
     start_time=start_time.at[1].set(0)
@@ -196,7 +198,8 @@ def get_dataset(
         seed: int = 42,
         book_depth: int = 500,
         day_indeces: Optional[List[int]] = None,
-        limit_seq: int = math.inf
+        limit_seq: int = math.inf,
+        test_split: float = 0.1,
     ):
     msg_files = sorted(glob(str(data_dir) + '/*message*.npy'))
     book_files = sorted(glob(str(data_dir) + '/*book*.npy'))
@@ -205,6 +208,10 @@ def get_dataset(
         #restricts the data to only include certain days. 
         msg_files=[msg_files[i] for i in day_indeces]
         book_files=[book_files[i] for i in day_indeces]
+    if test_split>0:
+        n_test_files = max(1, int(len(msg_files) * test_split))
+        msg_files = msg_files[-n_test_files:]
+        book_files = book_files[-n_test_files:]
 
     ds = LOBSTER_Dataset(
         msg_files,
@@ -703,7 +710,7 @@ def _generate_msg(
         rng: jax.dtypes.prng_key,
         hidden: Tuple,
         time_i: jax.Array,
-        ema_start:bool,
+        # ema_start:bool,
         b_seq_real:Optional[jax.Array]=None,
     ) -> Tuple[jax.Array, LobState, jax.Array, jax.Array, jax.Array, jax.Array, int]:
     """

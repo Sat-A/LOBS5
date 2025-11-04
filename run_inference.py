@@ -73,14 +73,18 @@ if __name__ == "__main__":
     # get args from command line to select stock between GOOG, INTC
     parser = argparse.ArgumentParser()
     parser.add_argument('--stock', type=str, default='GOOG', help='stock to evaluate')
+    parser.add_argument('--checkpoint_step', type=int, default=None, help='Which checkpoint step to load')
+    parser.add_argument('--test_split', type=float, default=0.1, help='Which test split to use')
+
+
     run_args = parser.parse_args()
 
-    overfit_debug = True
+    overfit_debug = False
 
     if run_args.stock == 'AMZN':
-        data_dir = '/home/myuser/processed_data/AMZN/2024_Dec_END'
-        ckpt_path='/home/myuser/checkpoints/prime-fog-25_km6097ex'
-        save_dir='/home/myuser/eval_local'
+        data_dir = '/home/myuser/processed_data/AMZN/2024_Dec'
+        ckpt_path='/home/myuser/checkpoints/lyric-pyramid-35_vqddc48h'
+        save_dir='/home/myuser/eval_local/AMZN/2024_Dec/lyric-pyramid'
     if run_args.stock == 'GOOG':
         data_dir = '/data1/sascha/data/GOOG/preprocessed/GOOG2019'
         ckpt_path='/data1/sascha/data/checkpoints/olive-blaze-463_9eq56l8n/'
@@ -140,7 +144,7 @@ if __name__ == "__main__":
     ckpt = load_checkpoint(
         new_train_state,
         ckpt_path,
-        step=18,
+        step=0 if run_args.checkpoint_step is None else run_args.checkpoint_step,
         train=False,
     )
     state = ckpt['model']
@@ -162,6 +166,7 @@ if __name__ == "__main__":
     ds = inference.get_dataset(data_dir,
                                n_messages_conditional,
                                n_eval_messages,
+                               test_split= run_args.test_split,
                             #    day_indeces= [0],
                             #    limit_seq=4 
                                )
