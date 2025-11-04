@@ -105,11 +105,15 @@ def load_metadata(
         path: str,
     ) -> Namespace:
 
-    json_path = path + '/metadata/metadata'
+    json_path = path + '/metadata/_ROOT_METADATA'
     # load json path to dict
     with open(json_path, 'r') as f:
         metadata = json.load(f)
-    return Namespace(**metadata)
+    # Extract the actual parameters from the nested custom_metadata structure
+    if 'custom_metadata' in metadata:
+        return Namespace(**metadata['custom_metadata'])
+    else:
+        return Namespace(**metadata)
 
 def load_checkpoint(
         state: TrainState,
