@@ -20,6 +20,7 @@ else:
 	#  Required at this high level, because the init func in the 
 	# worker spawn interface happens after init. of the CUDA process. 
 	os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+	os.environ["JAX_PLATFORMS"] = "cpu"
 
 from lob.dataloading import Datasets
 
