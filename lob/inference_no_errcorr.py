@@ -1282,7 +1282,7 @@ def sample_new(
         else:
             debug_book=False
         if debug_book:
-            real_book=jnp.concatenate([jnp.expand_dims(b_seq_inp[-1],axis=1),b_seq_eval[:,:-1]],axis=1)
+            real_book=jnp.concatenate([jnp.expand_dims(b_seq_inp[:,-1],axis=1),b_seq_eval[:,:-1]],axis=1)
             print(real_book.shape)
         else:
             real_book=None
