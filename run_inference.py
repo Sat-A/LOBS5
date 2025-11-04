@@ -3,7 +3,7 @@ import os
 import sys
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true"
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 # os.environ['XLA_FLAGS'] ='--xla_gpu_deterministic_ops=true'
 
 
@@ -73,11 +73,14 @@ if __name__ == "__main__":
     # get args from command line to select stock between GOOG, INTC
     parser = argparse.ArgumentParser()
     parser.add_argument('--stock', type=str, default='GOOG', help='stock to evaluate')
-
     run_args = parser.parse_args()
 
+    overfit_debug = True
 
-
+    if run_args.stock == 'AMZN':
+        data_dir = '/home/myuser/processed_data/AMZN/2024_Dec_END'
+        ckpt_path='/home/myuser/checkpoints/prime-fog-25_km6097ex'
+        save_dir='/home/myuser/eval_local'
     if run_args.stock == 'GOOG':
         data_dir = '/data1/sascha/data/GOOG/preprocessed/GOOG2019'
         ckpt_path='/data1/sascha/data/checkpoints/olive-blaze-463_9eq56l8n/'
@@ -111,7 +114,10 @@ if __name__ == "__main__":
 
     rng = jax.random.key(42)
     rng, rng_ = jax.random.split(rng)
-    sample_top_n = 1
+    if overfit_debug:
+        sample_top_n = 1
+    else:
+        sample_top_n = -1
     tick_size = 100
 
     # load train state from disk
@@ -184,8 +190,8 @@ if __name__ == "__main__":
     if (logger.hasHandlers()):
         logger.handlers.clear()
     logger.addHandler(fhandler)
-    logger.setLevel(logging.DEBUG)
-    # logger.setLevel(logging.WARNING)
+    logger.setLevel(logging.WARNING)
+    # logger.setLevel(logging.DEBUG)
 
     ##################################################
 
@@ -210,7 +216,8 @@ if __name__ == "__main__":
         v.ENCODING,
         run_args.stock,
         save_folder=save_dir,
-        sample_top_n=sample_top_n,
+        sample_top_n= sample_top_n,
         args=args,
         conditional= False,
+        overfit_debug=overfit_debug,
     )

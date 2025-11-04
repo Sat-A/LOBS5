@@ -80,6 +80,7 @@ def train(args):
             n_data_workers=args.n_data_workers,
             shuffle_train=args.shuffle_train,
             rand_offset=args.random_offsets_train,
+            debug_overfit=args.debug_overfit
         )
 
     
@@ -318,12 +319,14 @@ def train(args):
             f"\tBest Test Loss: {best_test_loss:.5f} -- Best Test Accuracy:"
             f" {best_test_acc:.4f} at Epoch {best_epoch + 1}\n"
         )
-        ce_table.add_column(name="val_ce_"+str(epoch),data=val_ce_means.tolist())
-        ce_table.add_column(name="test_ce_"+str(epoch),data=test_ce_means.tolist())
-        ce_table.add_column(name="val_acc_"+str(epoch),data=val_acc_means.tolist())
-        ce_table.add_column(name="test_acc_"+str(epoch),data=test_acc_means.tolist())
-        ce_table.add_column(name="train_ce_"+str(epoch),data=ce_by_tok.tolist())
-        ce_table=wandb.Table(columns=ce_table.columns,data=ce_table.data)
+
+        if args.log_ce_tables:
+            ce_table.add_column(name="val_ce_"+str(epoch),data=val_ce_means.tolist())
+            ce_table.add_column(name="test_ce_"+str(epoch),data=test_ce_means.tolist())
+            ce_table.add_column(name="val_acc_"+str(epoch),data=val_acc_means.tolist())
+            ce_table.add_column(name="test_acc_"+str(epoch),data=test_acc_means.tolist())
+            ce_table.add_column(name="train_ce_"+str(epoch),data=ce_by_tok.tolist())
+            ce_table=wandb.Table(columns=ce_table.columns,data=ce_table.data)
         
 
         if valloader is not None:
@@ -339,7 +342,7 @@ def train(args):
                     "Opt acc": opt_acc,
                     "lr": float(state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'][0]),
                     "ssm_lr": float(state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate'][0]),
-                    "Training CE by token":ce_table
+                    # "Training CE by token":ce_table
                 }
             )
         else:
@@ -353,9 +356,12 @@ def train(args):
                     "Opt acc": opt_acc,
                     "lr": float(state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'][0]),
                     "ssm_lr": float(state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate'][0]),
-                    "Training CE by token":ce_table
+                    # "Training CE by token":ce_table
                 }
             )
+
+        if args.log_ce_tables:
+            wandb.log({"CE by token": ce_table})
         wandb.run.summary["Best Val Loss"] = best_loss
         wandb.run.summary["Best Val Accuracy"] = best_acc
         wandb.run.summary["Best Epoch"] = best_epoch

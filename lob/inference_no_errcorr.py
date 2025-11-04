@@ -1156,6 +1156,7 @@ def sample_new(
         args: Optional[Any] = None,
         conditional: bool = True,
         v: Vocab = Vocab(),
+        overfit_debug: bool = False,
     ):
     """
     """
@@ -1165,12 +1166,15 @@ def sample_new(
         assert seq_len_cond==0, "If conditional flag is false, then cannot have any tokens for conditioning."
 
     rng, rng_ = jax.random.split(rng)
-    sample_i = jax.random.choice(
-        rng_,
-        jnp.arange(len(ds), dtype=jnp.int32),
-        shape=(n_samples // batch_size, batch_size),
-        replace=False
-    ).tolist()
+    if overfit_debug:
+        sample_i = [list(range(batch_size))]
+    else:
+        sample_i = jax.random.choice(
+            rng_,
+            jnp.arange(len(ds), dtype=jnp.int32),
+            shape=(n_samples // batch_size, batch_size),
+            replace=False
+        ).tolist()
     rng, rng_ = jax.random.split(rng)
 
     # create folders to save the data if they don't exist yet
@@ -1188,14 +1192,14 @@ def sample_new(
                                         n_fused_layers=args.n_layers,
                                         h_size_ema=args.ssm_size_base)
 
-    jax.debug.print("Init hidden is: \n {}",len(init_hidden))
+    # jax.debug.print("Init hidden is: \n {}",len(init_hidden))
     # Assumes only a single hidden state is given and needs to be duplicated. TODO Add a flag. 
     init_hidden_batched=jax.tree_util.tree_map(lambda x : jnp.resize(x,(batch_size,)+x.shape),init_hidden)
 
 
     #TODO: complete these options to make sure every case works and add some asserts. 
-    print(jax.tree_util.tree_map(lambda x : x.shape, init_hidden ))
-    print(jax.tree_util.tree_map(lambda x : x.shape, init_hidden_batched ))
+    # print(jax.tree_util.tree_map(lambda x : x.shape, init_hidden ))
+    # print(jax.tree_util.tree_map(lambda x : x.shape, init_hidden_batched ))
     
 
     # init_time_batched=jax.tree_util.tree_map(lambda x : jnp.resize(x,(batch_size,)+x.shape),init_time)
@@ -1227,6 +1231,18 @@ def sample_new(
         # encoded data
         m_seq_inp = m_seq[:, : seq_len_cond+1]
         m_seq_eval = m_seq[:, (seq_len_cond+1): ]
+        # Debug prints to file
+        # Set print options to show all array elements
+        if overfit_debug:
+            with open(f'debug_m_seq_inp_batch_{batch_i[0]}.txt', 'w') as f:
+                print(f"m_seq_inp shape: {m_seq_inp.shape}", file=f)
+                print(f"m_seq_inp:\n{m_seq_inp}", file=f)
+            
+            with open(f'debug_m_seq_eval_batch_{batch_i[0]}.txt', 'w') as f:
+                print(f"m_seq_eval shape: {m_seq_eval.shape}", file=f)
+                print(f"m_seq_eval:\n{m_seq_eval}", file=f)
+        
+        # Reset print options to default
         b_seq_inp = b_seq[: , : n_cond_msgs+1]
         b_seq_eval = b_seq[:, (seq_len_cond+1): ] 
         # true L2 data: remove price change column
@@ -1254,9 +1270,14 @@ def sample_new(
         # convert m_seq_raw_eval to sim_msgs
         # msgs_eval = msgs_to_jnp(m_seq_raw_eval[: n_gen_msgs])
         # sim_state_eval, l2_book_states_eval, _ = sim_init.process_orders_array_l2(sim_state_init, msgs_eval, l2_state_n)
-        debug_book=False
+
+        if overfit_debug:
+            debug_book=True
+        else:
+            debug_book=False
         if debug_book:
             real_book=jnp.concatenate([jnp.expand_dims(b_seq_inp[-1],axis=1),b_seq_eval[:,:-1]],axis=1)
+            print(real_book.shape)
         else:
             real_book=None
         # print('m_seq_inp.shape', m_seq_inp.shape)
@@ -1264,6 +1285,8 @@ def sample_new(
         # print('sim_states_init.asks.shape', sim_states_init.asks.shape)
         # print('sim_states_init.bids.shape', sim_states_init.bids.shape)
         # print('sim_states_init.trades.shape', sim_states_init.trades.shape)
+
+
         msgs_decoded, l2_book_states, num_errors,mgs_tokens = generate_batched(
             sim_init,
             train_state,
@@ -1302,14 +1325,14 @@ def sample_new(
 
             # get date from filename
             date = ds.get_date(i)
-            
-            # jnp.set_printoptions(threshold=sys.maxsize)
-            # with open(save_folder+f'/tokens/{stock_symbol}_{date}_real_{i}.txt', 'w') as f:
-            #     print( onp.reshape(msg_tok_eval,(-1,Message_Tokenizer.MSG_LEN)), file=f)
+            if overfit_debug:
+                jnp.set_printoptions(threshold=sys.maxsize)
+                with open(save_folder+f'/tokens/{stock_symbol}_{date}_real_{i}.txt', 'w') as f:
+                    print( onp.reshape(msg_tok_eval,(-1,Message_Tokenizer.MSG_LEN)), file=f)
 
-            # with open(save_folder+f'/tokens/{stock_symbol}_{date}_gen_{i}.txt', 'w') as f:
-            #     print( msg_tok, file=f)
-            # jnp.set_printoptions()
+                with open(save_folder+f'/tokens/{stock_symbol}_{date}_gen_{i}.txt', 'w') as f:
+                    print( msg_tok, file=f)
+                jnp.set_printoptions()
             
             # input / cond data
             msg_to_lobster_format(cond_msg).to_csv(

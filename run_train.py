@@ -169,8 +169,11 @@ if __name__ == "__main__":
 				help="Whether or not the training data shuffled.")
 	parser.add_argument("--ignore_times", type=str2bool, default=False,
                     help="Ignore the loss due to predicting the time.")
+	parser.add_argument("--debug_overfit", type=str2bool, default=False,
+				help="Runs the training loop in overfit mode on a single batch of data. Validation and testing are from the same set. ")
+	parser.add_argument("--log_ce_tables", type=str2bool, default=False,
+				help="Logs the CE values on a per token level to wandb. Memory intensive.")
 	
-
 	args = parser.parse_args()
 
 

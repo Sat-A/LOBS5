@@ -31,9 +31,14 @@ def create_lobster_prediction_dataset(
 		return_raw_msgs: bool = False,
 		shuffle_train=True,
 		rand_offset=True,
+		debug_overfit=False,
 	) -> ReturnType:
 	""" 
 	"""
+	if debug_overfit:
+		rand_offset= False
+		shuffle_train= False
+
 
 	print("[*] Generating LOBSTER Prediction Dataset from", cache_dir)
 	from .lobster_dataloader import LOBSTER
@@ -51,6 +56,7 @@ def create_lobster_prediction_dataset(
 		n_cache_files=1e7,  # large number to keep everything in cache
 		return_raw_msgs=return_raw_msgs,
 		rand_offset=rand_offset,
+		debug_overfit=debug_overfit,
 	)
 	dataset_obj.setup()
  
