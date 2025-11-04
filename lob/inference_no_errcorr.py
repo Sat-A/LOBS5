@@ -333,7 +333,7 @@ def get_sim_msg(
         sim_msg, msg_decoded
     )
 
-# event_type, side, quantity, price, trade(r)_id, order_id, time_s, time_ns
+# event_type, side, quantity, price,order_id,trade(r)_id, time_s, time_ns
 @jax.jit
 def construct_sim_msg(
         event_type: int,
@@ -351,8 +351,8 @@ def construct_sim_msg(
         (side * 2) - 1,
         quantity,
         price,
-        0, # trader_id
-        order_id,
+        order_id, # order_id
+        -88, 
         time_s,
         time_ns,
     ], dtype=jnp.int32)
