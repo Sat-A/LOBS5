@@ -197,3 +197,10 @@ honest-oath.tar.gz
 .bash_history
 .gitconfig
 .netrc
+
+gymnax_exchange/*
+debug_m_seq_eval_batch_0.txt
+.gitignore
+debug_m_seq_inp_batch_0.txt
+eval_local/*
+.gitignore
