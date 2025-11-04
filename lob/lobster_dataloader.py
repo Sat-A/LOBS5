@@ -428,6 +428,7 @@ class LOBSTER_Dataset(Dataset):
 
 
     def __getitem__(self, idx):
+        #print(idx)
         if hasattr(idx, '__len__'):
             return list(zip(*[self[i] for i in idx]))
 
@@ -459,6 +460,7 @@ class LOBSTER_Dataset(Dataset):
         # encode message
 
         X = encode_msgs(X_raw, self.vocab.ENCODING)
+        # print(f"lobster_dataloader.py: First loaded message from batch is \n  {X_raw[0]}\n which is \n {X[0]}\nafter encoding.")
 
         
         

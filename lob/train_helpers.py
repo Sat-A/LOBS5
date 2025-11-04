@@ -489,12 +489,15 @@ def train_epoch(
     decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min = lr_params
     #with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
     for batch_idx, batch in enumerate(tqdm(trainloader)):
-
+        # print(f"train_epoch: Epoch {epoch} - Batch {batch_idx} / {len(trainloader)}")
+        # print(f"train_epoch: Batch input shape: {batch[0].shape}, batch target shape: {batch[1].shape}")
         if not debug_loading:
             if (step>1) & (step<3) & debug_profiler:
                 jax.profiler.start_trace("/tmp/tensorboard")
             inputs, labels, integration_times = prep_batch(batch, seq_len, num_devices)
-        
+            # print("train_epoch: Prepared batch inputs shape:", inputs[0].shape)
+            # print("train_epoch: Prepared batch labels shape:", labels.shape)
+            # print("train_epoch: Inputs 0:5:", inputs[0][0,0:5,:])
             rng, drop_rng = jax.random.split(rng)
 
             
@@ -810,6 +813,7 @@ def validate(state,
     for batch_idx, batch in enumerate(tqdm(testloader)):
         inputs, labels, integration_timesteps = prep_batch(batch, seq_len, num_devices)
         # print("eval step with method: ", apply_method)
+        # print("Validataion: Inputs 0:5:", inputs[0][0,0:5,:])
         loss, acc, pred = eval_step(
             inputs, labels, integration_timesteps, state, apply_fn, batchnorm,apply_method,init_hiddens,ignore_times)
         # losses = np.append(losses, loss)

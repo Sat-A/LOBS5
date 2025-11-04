@@ -266,8 +266,7 @@ def get_sim_msg(
     # decoded predicted message
     # pred_msg = tok.decode(pred_msg_enc, v).squeeze()
     msg_decoded = encoding.decode_msg(pred_msg_enc, encoder)
-    # debug('decoded predicted message:', msg_decoded)
-
+    # jax.debug.print('decoded predicted message: \n {}', msg_decoded)
     new_part = msg_decoded[: Message_Tokenizer.N_NEW_FIELDS]
     # ref part is not needed for the simulator logic
     # ref_part = pred_msg[Message_Tokenizer.N_NEW_FIELDS: ]
@@ -298,6 +297,8 @@ def get_sim_msg(
     #     )
     # )
     orig_order = sim.get_order_at_time(sim_state, side, time_s_ref, time_ns_ref)
+    # jax.debug.print('orig_order: \n {}', orig_order)
+
     # jax.debug.print('ref time is \n {} {}',time_s_ref,time_ns_ref)
 
     # jax.debug.print('orig_order \n {}', orig_order)
@@ -804,15 +805,18 @@ def _generate_msg(
         tick_size = tick_size,
         encoder = encoder,
     )
+    # def print_cond(string_,msg,n_msg_todo):
+    #     if n_msg_todo==500:
+    #         print(f"{string_} with {n_msg_todo} msg todo \n {msg}")
 
-    # jax.debug.print('sim_msg with {} msg todo \n {}',n_msg_todo, sim_msg)
+    # jax.debug.callback(print_cond, "sim_msg", sim_msg,n_msg_todo)
 
     # feed message to simulator, updating book state
-    # jax.debug.print('sim_state before with {} msg todo \n {}',n_msg_todo, sim_state)
+    # jax.debug.callback(print_cond, "sim_state before", sim_state,n_msg_todo)
 
     sim_state = sim.process_order_array(sim_state, sim_msg)
 
-    # jax.debug.print('sim_state after with {} msg todo \n {}',n_msg_todo, sim_state)
+    # jax.debug.callback(print_cond, "sim_state after", sim_state,n_msg_todo)
 
 
     # debug('trades', _trades)
@@ -1212,6 +1216,8 @@ def sample_new(
         # TODO: check if we can init the dataset without the raw data 
         #       if it's not needed 
         m_seq, _, b_seq_pv, msg_seq_raw, book_l2_init = ds[batch_i]
+        # print("sample_new: M_seq_inputs:", m_seq)
+        # print('m_seq.shape before jnp.array', onp.array(m_seq).shape)
         m_seq = jnp.array(m_seq)
         b_seq_pv = jnp.array(b_seq_pv)
         msg_seq_raw = jnp.array(msg_seq_raw)
