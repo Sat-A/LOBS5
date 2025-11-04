@@ -541,7 +541,7 @@ def train_epoch(
             if (step>20) & (step<=21) & debug_profiler:
                 jax.profiler.stop_trace()
                 break
-            if (curtail_epochs is not None) and (batch_idx>curtail_epochs):
+            if (curtail_epochs is not None) and (batch_idx>=curtail_epochs):
                 print("Ending epoch early due to curtail_epochs being ",curtail_epochs)
                 break
         else:
@@ -832,7 +832,7 @@ def validate(state,
 
         losses.append(loss)
         accuracies.append(acc)
-        if curtail_epoch is not None and batch_idx>curtail_epoch:
+        if curtail_epoch is not None and batch_idx>=curtail_epoch:
             print(f"Ending epoch early at step {batch_idx} due to curtail_epoch arg.")
             break
 
