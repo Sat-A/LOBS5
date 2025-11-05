@@ -52,6 +52,9 @@ test:
 train_small:
 	$(DOCKER_RUN_BASIC) /bin/bash -c "sh bin/run_experiments/run_lobster_padded_small.sh"
 
+train_large:
+	$(DOCKER_RUN_BASIC) /bin/bash -c "sh bin/run_experiments/run_lobster_padded_large.sh"
+
 inference:
 	$(DOCKER_RUN_BASIC) /bin/bash -c "python3 ./run_inference.py"
 

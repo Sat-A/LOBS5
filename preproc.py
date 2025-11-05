@@ -208,13 +208,18 @@ def process_message_files(
             print('skipping', m_path)
             continue
         
+        
         messages = load_message_df(m_f)
-
-        book = pd.read_csv(
+        try:
+            book = pd.read_csv(
             b_f,
             index_col=False,
             header=None
         )
+        except pd.errors.EmptyDataError:
+            print(b_f, " is empty")
+            continue
+
         assert len(messages) == len(book), f'messages: {m_f} orderbook: {b_f} ;{len(messages)} != {len(book)}'
 
         if filter_above_lvl:
@@ -274,11 +279,15 @@ def process_book_files(
 
         messages = load_message_df(m_f)
 
-        book = pd.read_csv(
+        try:
+            book = pd.read_csv(
             b_f,
             index_col=False,
             header=None
         )
+        except pd.errors.EmptyDataError:
+            print(b_f, " is empty")
+            continue
 
         # remove disallowed order types
         messages = messages.loc[messages.event_type.isin(allowed_events)]
