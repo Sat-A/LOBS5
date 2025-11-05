@@ -48,6 +48,7 @@ requests
 tensorboard
 tensorboardX
 wandb
+plotly #6.4.0 vs #5.22.0
 
 # Utility Libraries
 tqdm

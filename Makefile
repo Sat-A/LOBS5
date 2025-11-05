@@ -18,7 +18,14 @@ DATADIR=~/data
 endif
 SCRATCH_DIR=~/scratch_LOB
 GYMNAX_DIR=/homes/80/sascha/AlphaTrade/gymnax_exchange
-BASE_FLAGS=-it --rm -v ${PWD}:/home/$(MYUSER) -v $(DATADIR):/home/$(MYUSER)/data -v $(SCRATCH_DIR):/home/$(MYUSER)/scratch -v $(GYMNAX_DIR):/home/$(MYUSER)/gymnax_exchange --shm-size 20G
+LOBBENCH_DIR=~/lob_bench
+BASE_FLAGS=-it --rm \
+	-v ${PWD}:/home/$(MYUSER) \
+	-v $(DATADIR):/home/$(MYUSER)/data \
+	-v $(SCRATCH_DIR):/home/$(MYUSER)/scratch \
+	-v $(GYMNAX_DIR):/home/$(MYUSER)/gymnax_exchange \
+	-v $(LOBBENCH_DIR):/home/$(MYUSER)/lob_bench \
+	--shm-size 20G
 PORT_FLAGS= -p 8060:80 -p 8064:6006
 RUN_FLAGS=$(GPUS) $(BASE_FLAGS) $(PORT_FLAGS)
 BASIC_FLAGS=$(GPUS) $(BASE_FLAGS)
