@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import flax
 import orbax.checkpoint as ocp
 import wandb
+import gc
 
 from lob.init_train import init_train_state, load_checkpoint, save_checkpoint, deduplicate_trainstate
 from lob.dataloading import create_lobster_prediction_dataset, create_lobster_train_loader#, Datasets
@@ -153,10 +154,12 @@ def train(args):
         dt = [[x] for (x,) in zip([*range(seq_len)])]
     ce_table=wandb.Table(columns=["tok"] ,data=dt)
 
-    
+    ignore_times=args.ignore_times
+    batchnorm=args.batchnorm
 
     for epoch in range(args.epochs):
         print(f"[*] Starting Training Epoch {epoch + 1}...")
+        # jax.profiler.start_trace("./jax-traces")
 
         if epoch < args.warmup_end:
             print("using linear warmup for epoch {}".format(epoch+1))
@@ -180,7 +183,6 @@ def train(args):
         print('Training on', args.num_devices, 'devices.')
         train_rng, skey = random.split(train_rng)
 
-
         #Pass an initial hidden state to be used in case of the 'RNN' forward pass being used. 
         state, train_loss,ce_by_tok ,step = train_epoch(state,
                                               skey,
@@ -189,7 +191,7 @@ def train(args):
                                               trainloader,
                                               seq_len,
                                               #in_dim,
-                                              args.batchnorm,
+                                              batchnorm,
                                               lr_params,
                                               args.num_devices,
                                               args.debug_loading,
@@ -197,7 +199,8 @@ def train(args):
                                               args.curtail_epochs,
                                               init_hidden,
                                               epoch,
-                                              args.ignore_times)
+                                              ignore_times,
+                                              args.log_ce_tables)
 
         if args.random_offsets_train:
             # reinit training loader, so that sequences are initialised with
@@ -210,6 +213,8 @@ def train(args):
                 num_workers=args.n_data_workers,
                 reset_train_offsets=args.random_offsets_train,
                 shuffle=args.shuffle_train)
+        print(f"val model hash: {val_model.__hash__()}")
+        print(f"val model apply hash: {val_model.__hash__()}")
 
         if valloader is not None:
             print(f"[*] Running Epoch {epoch + 1} Validation ") #on train set (With call)...
@@ -222,12 +227,13 @@ def train(args):
                                         valloader,
                                         seq_len,
                                         in_dim,
-                                        args.batchnorm,
+                                        batchnorm,
                                         args.num_devices,
                                         epoch,
                                         curtail_epoch=args.curtail_epochs,
                                         apply_method='__call_ar__',
-                                        ignore_times=args.ignore_times)
+                                        ignore_times=ignore_times,
+                                        log_ce_tables=args.log_ce_tables)
 
             print(f"[*] Running Epoch {epoch + 1} Test ") #on train set (With Call RNN)...
             (test_loss, test_acc,
@@ -237,12 +243,13 @@ def train(args):
                                            testloader,
                                            seq_len,
                                            in_dim,
-                                           args.batchnorm,
+                                           batchnorm,
                                            args.num_devices,
                                            epoch,
                                            curtail_epoch=args.curtail_epochs,
                                            apply_method='__call_ar__',
-                                           ignore_times=args.ignore_times)
+                                           ignore_times=ignore_times,
+                                           log_ce_tables=args.log_ce_tables)
 
             print(f"\n=>> Epoch {epoch + 1} Metrics ===")
             print(
@@ -262,11 +269,12 @@ def train(args):
                                          valloader,
                                          seq_len,
                                          in_dim,
-                                         args.batchnorm,
+                                         batchnorm,
                                          args.num_devices,
                                          epoch,
                                          curtail_epoch=args.curtail_epochs,
-                                         ignore_times=args.ignore_times)
+                                         ignore_times=ignore_times,
+                                         log_ce_tables=args.log_ce_tables)
             val_loss=test_loss
             val_acc=test_acc
 
@@ -368,6 +376,10 @@ def train(args):
         wandb.run.summary["Best Test Loss"] = best_test_loss
         wandb.run.summary["Best Test Accuracy"] = best_test_acc
         # print("IGNORING EARLY STOPPING FOR TINY EPOCH SIZE ")
-
+        # After each epoch
+        gc.collect()
+        # jax.clear_backends()
+        jax.clear_caches()
+        # jax.profiler.stop_trace()
         if count > args.early_stop_patience:
             break

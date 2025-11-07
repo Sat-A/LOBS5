@@ -477,6 +477,7 @@ def train_epoch(
         init_hiddens,
         epoch,
         ignore_times,
+        log_ce_tables,
     ):
 
     """
@@ -535,7 +536,8 @@ def train_epoch(
 
             # losses are already averaged across devices (--> should be all the same here)
             batch_losses.append(loss[0])
-            cross_entropies.append(ce)
+            if log_ce_tables:
+                cross_entropies.append(ce)
             lr_params = (decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min)
             state, step = update_learning_rate_per_step(lr_params, state)
             if (step>20) & (step<=21) & debug_profiler:
@@ -550,7 +552,10 @@ def train_epoch(
     
         
     # Return average loss over batches
-    ce_means=np.mean(np.concatenate(cross_entropies,axis=0),axis=0)
+    if log_ce_tables:
+        ce_means=np.mean(np.concatenate(cross_entropies,axis=0),axis=0)
+    else:
+        ce_means=None
     # jax.debug.print("CE of epoch by token: {}",ce_means.shape)
     loss_mean=np.mean(np.array(batch_losses))
     return state,loss_mean , ce_means,step
@@ -560,6 +565,7 @@ def train_epoch(
 @partial(jax.jit,static_argnums=(2,))
 def repeat_book(msg,book,shift_start):
     #DEFINITION OF START BOOK:
+    # print("checking for compile in repeat_book")
     if msg.shape[0]>book.shape[0]:
         book = np.repeat(book, (msg.shape[0]) // book.shape[0], axis=0)
     # if shift_start:
@@ -586,12 +592,17 @@ def train_step(
         batchnorm: bool, # 5
         ignore_times:bool, #6
     ):
-    #print('tracing par_loss_and_grad')
+
+    # Print hash values of static arguments
+    # print(f"batchnorm hash: {batchnorm.__hash__()}")
+    # print(f"ignore_times hash: {ignore_times.__hash__()}")
+    # print('checking for compile in train_step')
 
     batch_inputs=repeat_book(*batch_inputs,True)
     # batch_integration_timesteps=repeat_book(*batch_integration_timesteps)
 
     def loss_fn(params):
+        # print('checking for compile in loss_fn')
         if batchnorm:
             logits, mod_vars = state.apply_fn( 
                 {"params": params, "batch_stats": state.batch_stats},
@@ -803,10 +814,11 @@ def validate(state,
              num_devices,
              epoch,
              curtail_epoch=None,
-             ignore_times=False,
+             ignore_times: bool =False,
              step_rescale=1.0,
-             apply_method='__call_ar__',
-             init_hiddens=(np.array([0]))):
+             apply_method: str ='__call_ar__',
+             init_hiddens=(np.array([0])),
+             log_ce_tables : bool =False):
     """Validation function that loops over batches"""
     # losses, accuracies, preds = np.array([]), np.array([]), np.array([])
     losses, accuracies, preds = [], [], []
@@ -840,9 +852,14 @@ def validate(state,
     concat_acc=np.concatenate(accuracies,axis=0)
     print(f"Concat Loss is {concat_loss.shape}")
     print(f"Concat Acc is {concat_acc.shape}")
-    acc_means=np.mean(concat_acc,axis=(0,1))
-    ce_means=np.mean(concat_loss,axis=(0,1))
-    aveloss, aveaccu = np.mean(concat_loss), np.mean(np.array(accuracies))
+    if log_ce_tables:
+        acc_means=np.mean(concat_acc,axis=(0,1))
+        ce_means=np.mean(concat_loss,axis=(0,1))
+    else:
+        ce_means=None
+        acc_means=None
+    aveloss, aveaccu = np.mean(concat_loss), np.mean(np.asarray(accuracies))
+    del losses, accuracies
     return aveloss, aveaccu, ce_means,acc_means
 
 @partial(
@@ -864,6 +881,9 @@ def eval_step(
         init_hiddens,
         ignore_times,
     ):
+    # print("checking for compile in eval_step function")
+
+
     batch_inputs=repeat_book(*batch_inputs,True)
 
     if apply_method == '__call_ar__':
@@ -972,4 +992,7 @@ def swap_leading(targetsize,x):
     x=np.expand_dims(x,0)
     x=np.swapaxes(x,0,x.shape.index(targetsize))
     return x
+
+
+
 

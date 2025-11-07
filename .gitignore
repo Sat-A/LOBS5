@@ -204,3 +204,6 @@ debug_m_seq_eval_batch_0.txt
 debug_m_seq_inp_batch_0.txt
 eval_local/*
 .gitignore
+
+benchmark_local/*
+jax-traces/*
