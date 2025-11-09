@@ -83,8 +83,8 @@ if __name__ == "__main__":
 
     if run_args.stock == 'AMZN':
         data_dir = '/home/myuser/processed_data/AMZN/2024_Dec'
-        ckpt_path='/home/myuser/checkpoints/lyric-pyramid-35_vqddc48h'
-        save_dir='/home/myuser/eval_local/AMZN/2024_Dec/lyric-pyramid'
+        ckpt_path='/home/myuser/checkpoints/wise-leaf-36_a5ru9qfe'
+        save_dir='/home/myuser/eval_local/AMZN/2024_Dec/wise-leaf'
     if run_args.stock == 'GOOG':
         data_dir = '/data1/sascha/data/GOOG/preprocessed/GOOG2019'
         ckpt_path='/data1/sascha/data/checkpoints/olive-blaze-463_9eq56l8n/'
@@ -203,7 +203,7 @@ if __name__ == "__main__":
 
 
     n_samples = 1024
-    batch_size = 32
+    batch_size = 128
 
     # m_seq_gen, b_seq_gen, msgs_decoded, l2_book_states, num_errors = inference.sample_new(
     # saves data to disk
