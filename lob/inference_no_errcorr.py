@@ -1299,7 +1299,7 @@ def sample_new(
         # print('sim_states_init.bids.shape', sim_states_init.bids.shape)
         # print('sim_states_init.trades.shape', sim_states_init.trades.shape)
 
-
+        print('Before generation, real book is (should be none):', real_book)
         msgs_decoded, l2_book_states, num_errors,mgs_tokens = generate_batched(
             sim_init,
             train_state,
