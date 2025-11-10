@@ -225,7 +225,7 @@ class Vocab:
     START_TOK= 3
 
     def __init__(self) -> None:
-        self.counter = 4  # 0: MSK, 1: HID, 2: NAN, 4: START
+        self.counter = 4  # 0: MSK, 1: HID, 2: NAN, 3: START
         self.ENCODING = {}
         self.DECODING = {}
         self.DECODING_GLOBAL = {}
