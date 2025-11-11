@@ -20,7 +20,7 @@ dataset_fn = Callable[[str, Optional[int], Optional[int]], ReturnType]
 def create_lobster_prediction_dataset(
 		cache_dir: Union[str, Path] = DATA_DIR,
 		seed: int = 42,
-		mask_fn = LOBSTER_Dataset.causal_mask,
+		mask_fn = LOBSTER_Dataset.no_mask,
 		msg_seq_len: int = 500,
 		bsz: int=128,
 		use_book_data: bool = False,
