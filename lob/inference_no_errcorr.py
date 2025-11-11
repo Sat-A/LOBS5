@@ -24,6 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 from utils import debug, info
 import math
+import time
 
 import lob.validation_helpers as valh
 import lob.evaluation as eval
@@ -159,6 +160,7 @@ def get_sim(
         init_l2_book: jax.Array,
         replay_msgs_raw: jax.Array,
         start_time: jax.Array,
+        sim: OrderBook,
         # nOrders: int = 100,
         # nTrades: int = 100
         # sim_book_levels: int,
@@ -167,8 +169,7 @@ def get_sim(
     """
     """
 
-    # reset simulator : args are (nOrders, nTrades)
-    sim = OrderBook(cfg=JAXLOB_Configuration(cancel_mode=cst.CancelMode.CANCEL_UNIFORM_AND_LARGE.value))
+    # reset simulator : args are (nOrders, nTrades)        
     #Set the ns component of the start time to 0 to ensure that init messages are before first message.
     # Only edge case is if first message and init are 0 ns - unlikely. 
     start_time=start_time.at[1].set(0)
@@ -179,14 +180,15 @@ def get_sim(
     # so that sim is at the same state as the model
     replay = msgs_to_jnp(replay_msgs_raw)
     sim_state = sim.process_orders_array(sim_state, replay)
-    return sim, sim_state
+    return sim_state
 
 get_sims_vmap = jax.jit(
-    jax.vmap(
+    jax.vmap( 
         get_sim,
-        in_axes=(0, 0,0),
-        out_axes=(None, 0),
+        in_axes=(0, 0,0,None),
+        out_axes=(0),
     ),
+    static_argnums=(3,)
 )
 
 def get_dataset(
@@ -917,7 +919,7 @@ def generate(
     # l2_book_states = []
     # m_seq_raw = m_seq_raw.copy()
     # num_errors = 0
-
+    print("WARNING: Compiling the generate function, you should only see this once.")
     m_seq_cond=m_seq_cond.copy()
     b_seq_cond=b_seq_cond.copy()
 
@@ -1216,10 +1218,10 @@ def sample_new(
     # init_time_batched=jax.tree_util.tree_map(lambda x : jnp.resize(x,(batch_size,)+x.shape),init_time)
     # print(jax.tree_util.tree_map(lambda x : x.shape, init_time ))
     # print(jax.tree_util.tree_map(lambda x : x.shape, init_time_batched ))
-
+    sim_init = OrderBook(cfg=JAXLOB_Configuration(cancel_mode=cst.CancelMode.CANCEL_UNIFORM_AND_LARGE.value))
     # all_metrics = []
     for batch_i in tqdm(sample_i):
-        print('BATCH', batch_i)
+        # print('BATCH', batch_i)
         # TODO: check if we can init the dataset without the raw data 
         #       if it's not needed 
         m_seq, _, b_seq_pv, msg_seq_raw, book_l2_init = ds[batch_i]
@@ -1268,10 +1270,11 @@ def sample_new(
         m_seq_raw_eval = msg_seq_raw[:, n_cond_msgs: ]
 
         # initialise simulator
-        sim_init, sim_states_init = get_sims_vmap(
+        sim_states_init = get_sims_vmap(
             book_l2_init,  # book state before any messages
             m_seq_raw_inp, # messages to replay to init sim
             init_time_batched,
+            sim_init,
             # TODO: consider passing nOrders, nTrades
         )
 
@@ -1300,25 +1303,30 @@ def sample_new(
         # print('sim_states_init.trades.shape', sim_states_init.trades.shape)
 
         print('Before generation, real book is (should be none):', real_book)
+
+
+        start_time = time.time()        
         msgs_decoded, l2_book_states, num_errors,mgs_tokens = generate_batched(
-            sim_init,
-            train_state,
-            model,
-            batchnorm,
-            encoder,
-            sample_top_n,  # sample from entire distribution
-            tick_size,
+            sim_init, # static
+            train_state,  # None map, static? 
+            model, # static
+            batchnorm, # static
+            encoder, # None map, static?
+            sample_top_n,  # sample from entire distribution # static
+            tick_size, # static
             m_seq_inp[:], # in_axis = 0
             b_seq_inp, # in_axis = 0
-            n_gen_msgs,
-            sim_states_init, # in_axis = 0
+            n_gen_msgs, # static
+            sim_states_init, # in_axis = 0 
             jax.random.split(rng_, batch_size), # in_axis = 0
             init_hidden_batched,
-            conditional, 
+            conditional,  # static
             init_time_batched,
-            debug_book,
+            debug_book, # static
             real_book,
         )
+        end_time = time.time()
+        print(f"Generation time for batch of size {batch_size}: {(end_time - start_time):.2f} seconds")
         rng, rng_ = jax.random.split(rng)
         # TODO: save as metadata
         print('num_errors', num_errors)
