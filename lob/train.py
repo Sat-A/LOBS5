@@ -4,7 +4,16 @@ from jax import random
 import jax.numpy as jnp
 import flax
 import orbax.checkpoint as ocp
+
+
+
+# WandB configuration (must be set before wandb import)
+os.environ["WANDB_MODE"] = "online"
+os.environ["WANDB_BASE_URL"] = "https://api.wandb.ai"
+os.environ["WANDB_INSECURE_DISABLE_SSL"] = "True"
 import wandb
+
+
 import gc
 
 from lob.init_train import init_train_state, load_checkpoint, save_checkpoint, deduplicate_trainstate
