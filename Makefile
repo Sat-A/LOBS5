@@ -27,7 +27,7 @@ BASE_FLAGS=-it --rm \
 	-v $(LOBBENCH_DIR):/home/$(MYUSER)/lob_bench \
 	--shm-size 20G
 PORT_FLAGS= -p 8060:80 -p 8064:6006
-RUN_FLAGS=$(GPUS) $(BASE_FLAGS) $(PORT_FLAGS)
+RUN_FLAGS=$(BASE_FLAGS) $(PORT_FLAGS) $(GPUS) 
 BASIC_FLAGS=$(GPUS) $(BASE_FLAGS)
 
 
@@ -56,10 +56,13 @@ train_large:
 	$(DOCKER_RUN_BASIC) /bin/bash -c "sh bin/run_experiments/run_lobster_padded_large.sh"
 
 inference:
-	$(DOCKER_RUN_BASIC) /bin/bash -c "python3 ./run_inference.py"
+	$(DOCKER_RUN_BASIC) /bin/bash -c "python3 ./run_inference.py --stock AMZN --checkpoint_step 37 --test_split 1"
 
 eval:
 	$(DOCKER_RUN_BASIC) /bin/bash -c "python3 ./run_eval.py"
+
+benchmark:
+	$(DOCKER_RUN_BASIC) /bin/bash -c "python3 lob_bench/run_bench.py --stock AMZN --model_version ruby-aardvark --data_dir ./eval_local --save_dir ./benchmark_local/"
 
 workflow-test:
 	# without -it flag
