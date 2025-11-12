@@ -126,7 +126,9 @@ def pre_encode_directory(
     output_dir: str,
     num_workers: int = 4,
     symlink_books: bool = True,
-    vocab: Optional[Vocab] = None
+    vocab: Optional[Vocab] = None,
+    skip_files: int = 0,
+    max_files: Optional[int] = None
 ):
     """
     Pre-encode all message files in a directory tree.
@@ -137,6 +139,8 @@ def pre_encode_directory(
         num_workers: Number of parallel workers
         symlink_books: If True, symlink orderbook files; otherwise copy them
         vocab: Vocab instance (created if None)
+        skip_files: Skip first N message files (for batch processing)
+        max_files: Process at most N message files (for batch processing)
     """
     input_path = Path(input_dir)
     output_path = Path(output_dir)
@@ -175,8 +179,24 @@ def pre_encode_directory(
             # Assume it's a message file if unclear
             message_files.append((file_path, out_path, True))
 
-    print(f"  - {len(message_files)} message files to encode")
-    print(f"  - {len(book_files)} orderbook files to {'symlink' if symlink_books else 'copy'}")
+    print(f"  - {len(message_files)} message files total")
+
+    # Apply skip and max_files for batch processing
+    if skip_files > 0 or max_files is not None:
+        original_count = len(message_files)
+        end_idx = skip_files + max_files if max_files is not None else len(message_files)
+        message_files = message_files[skip_files:end_idx]
+        print(f"  - Processing message files {skip_files} to {skip_files + len(message_files)} (batch of {len(message_files)})")
+
+        # Only process orderbook files in the first batch (skip_files == 0)
+        if skip_files == 0:
+            print(f"  - {len(book_files)} orderbook files to {'symlink' if symlink_books else 'copy'} (first batch only)")
+        else:
+            print(f"  - Skipping orderbook files (processed in first batch)")
+            book_files = []  # Skip book files in subsequent batches
+    else:
+        print(f"  - {len(message_files)} message files to encode")
+        print(f"  - {len(book_files)} orderbook files to {'symlink' if symlink_books else 'copy'}")
 
     # Prepare arguments for multiprocessing
     args_list = []
@@ -185,7 +205,7 @@ def pre_encode_directory(
     for input_file, output_file, _ in message_files:
         args_list.append((input_file, output_file, vocab.ENCODING, True, symlink_books))
 
-    # Book files - just copy/symlink
+    # Book files - just copy/symlink (only in first batch when batching)
     for input_file, output_file, _ in book_files:
         args_list.append((input_file, output_file, vocab.ENCODING, False, symlink_books))
 
@@ -272,6 +292,20 @@ Examples:
         help="Copy orderbook files instead of creating symlinks (default: create symlinks)"
     )
 
+    parser.add_argument(
+        "--skip_files",
+        type=int,
+        default=0,
+        help="Skip first N message files (for batch processing, default: 0)"
+    )
+
+    parser.add_argument(
+        "--max_files",
+        type=int,
+        default=None,
+        help="Process at most N message files (for batch processing, default: all)"
+    )
+
     args = parser.parse_args()
 
     print("="*70)
@@ -281,6 +315,8 @@ Examples:
     print(f"Output directory: {args.output_dir}")
     print(f"Workers:          {args.num_workers}")
     print(f"Orderbook files:  {'Copy' if args.copy_books else 'Symlink'}")
+    if args.skip_files > 0 or args.max_files is not None:
+        print(f"Batch processing: Skip {args.skip_files}, Max {args.max_files if args.max_files else 'all'}")
     print("="*70 + "\n")
 
     try:
@@ -288,7 +324,9 @@ Examples:
             input_dir=args.input_dir,
             output_dir=args.output_dir,
             num_workers=args.num_workers,
-            symlink_books=not args.copy_books
+            symlink_books=not args.copy_books,
+            skip_files=args.skip_files,
+            max_files=args.max_files
         )
         print("\n✓ Pre-encoding completed successfully!")
 

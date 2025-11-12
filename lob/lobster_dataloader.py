@@ -362,6 +362,13 @@ class LOBSTER_Dataset(Dataset):
         self.inference = inference
         self.data_mode = data_mode
 
+        # Print informative message for pre-encoded mode
+        if data_mode == 'encoded':
+            print(f"[*] Using pre-encoded data mode")
+            print(f"    - Message: expecting shape (N, 22)")
+            if book_transform and book_files is not None:
+                print(f"    - Orderbook: expecting pre-transformed shape (N, {book_depth + 3})")
+
         self.message_files = message_files #
         if book_files is not None:
             assert len(book_files) == len(message_files)
@@ -465,6 +472,14 @@ class LOBSTER_Dataset(Dataset):
             # Data is already encoded (shape: N, 22), load directly
             X = np.array(X[seq_start: seq_end])
             X_raw = None  # Not available in encoded mode unless needed
+
+            # Validate shape for encoded data
+            if X.shape[1] != 22:  # Message_Tokenizer.MSG_LEN
+                raise ValueError(
+                    f"Pre-encoded message data has {X.shape[1]} tokens per message, "
+                    f"but expected 22. Data may be raw (14 columns) instead of encoded. "
+                    f"Use data_mode='preproc' for raw data."
+                )
         else:  # data_mode == 'preproc'
             # Data is raw (shape: N, 14), need to encode
             X_raw = np.array(X[seq_start: seq_end])
@@ -483,11 +498,30 @@ class LOBSTER_Dataset(Dataset):
             book = book[seq_start: seq_end + self.inference].copy()
     
             if self.return_raw_msgs:
+                if self.data_mode == 'encoded':
+                    raise NotImplementedError(
+                        "return_raw_msgs not supported with pre-encoded data. "
+                        "Raw messages are not available in encoded mode."
+                    )
                 book_l2_init = book[0, 3:].copy()
-            # t0=time.time()
-            # tranform from L2 (price volume) representation to fixed volume image 
+
+            # Transform from L2 (price volume) representation to fixed volume image
+            # Skip if data_mode='encoded' and book_transform=True (already transformed)
             if self.book_transform:
-                book = transform_L2_state_numpy(book, self.book_depth, 100)
+                if self.data_mode == 'encoded':
+                    # Book data is pre-transformed, validate shape
+                    expected_cols = self.book_depth + 3
+                    if book.shape[1] != expected_cols:
+                        raise ValueError(
+                            f"Pre-encoded book data has shape {book.shape}, but expected "
+                            f"({book.shape[0]}, {expected_cols}) for book_depth={self.book_depth}. "
+                            f"Ensure pre-processing used same book_depth parameter."
+                        )
+                    # Data already transformed, no need to run transform_L2_state_numpy
+                else:  # data_mode == 'preproc'
+                    # Need to transform raw L2 data
+                    book = transform_L2_state_numpy(book, self.book_depth, 100)
+
             book=np.array(book)
             # t1=time.time()
             # use raw price, volume series, rather than volume image
