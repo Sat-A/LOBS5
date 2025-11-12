@@ -32,6 +32,8 @@ def create_lobster_prediction_dataset(
 		shuffle_train=True,
 		rand_offset=True,
 		debug_overfit=False,
+		test_dir: Union[str, Path, None] = None,
+		data_mode: str = 'preproc',
 	) -> ReturnType:
 	""" 
 	"""
@@ -41,6 +43,8 @@ def create_lobster_prediction_dataset(
 
 
 	print("[*] Generating LOBSTER Prediction Dataset from", cache_dir)
+	if test_dir is not None:
+		print("[*] Using separate test directory:", test_dir)
 	from .lobster_dataloader import LOBSTER
 	name = 'lobster'
 
@@ -57,6 +61,8 @@ def create_lobster_prediction_dataset(
 		return_raw_msgs=return_raw_msgs,
 		rand_offset=rand_offset,
 		debug_overfit=debug_overfit,
+		test_data_dir=test_dir,
+		data_mode=data_mode,
 	)
 	dataset_obj.setup()
  

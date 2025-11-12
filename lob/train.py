@@ -76,7 +76,7 @@ def train(args):
     else:
         ValueError('Issue with mask function: logic for '+args.masking+' not implemented.')
 
-    (lobster_dataset, trainloader, valloader, testloader, aux_dataloaders, 
+    (lobster_dataset, trainloader, valloader, testloader, aux_dataloaders,
         n_classes, seq_len, in_dim, book_seq_len, book_dim, train_size) = \
         create_lobster_prediction_dataset(
             args.dir_name,
@@ -90,7 +90,9 @@ def train(args):
             n_data_workers=args.n_data_workers,
             shuffle_train=args.shuffle_train,
             rand_offset=args.random_offsets_train,
-            debug_overfit=args.debug_overfit
+            debug_overfit=args.debug_overfit,
+            test_dir=args.test_dir_name if hasattr(args, 'test_dir_name') else None,
+            data_mode=args.data_mode if hasattr(args, 'data_mode') else 'preproc',
         )
 
     

@@ -345,17 +345,22 @@ class LOBSTER_Dataset(Dataset):
             # and hence the book state after the message is
             # already available (shifts by one)
             inference=False,
-            limit_seq_per_file=math.inf
+            limit_seq_per_file=math.inf,
+            # data_mode: 'preproc' (encode on-the-fly) or 'encoded' (load pre-encoded)
+            data_mode='preproc'
             ) -> None:
 
 
         assert len(message_files) > 0
         assert not (use_simple_book and book_transform)
+        assert data_mode in ['preproc', 'encoded'], f"data_mode must be 'preproc' or 'encoded', got '{data_mode}'"
+        assert not (data_mode == 'encoded' and return_raw_msgs), "return_raw_msgs not supported with data_mode='encoded'"
 
         # shift book state by 1 for inference tasks,
         # because the most recent message is not masked (=complete)
         # and the new book state is already available
         self.inference = inference
+        self.data_mode = data_mode
 
         self.message_files = message_files #
         if book_files is not None:
@@ -454,12 +459,18 @@ class LOBSTER_Dataset(Dataset):
 
         seq_start = self.seq_offsets[file_idx] + seq_idx * self.n_messages
         seq_end = seq_start + self.n_messages
-        
-        X_raw = np.array(X[seq_start: seq_end])
-        # print(X_raw[0])
-        # encode message
 
-        X = encode_msgs(X_raw, self.vocab.ENCODING)
+        # Load and encode data based on data_mode
+        if self.data_mode == 'encoded':
+            # Data is already encoded (shape: N, 22), load directly
+            X = np.array(X[seq_start: seq_end])
+            X_raw = None  # Not available in encoded mode unless needed
+        else:  # data_mode == 'preproc'
+            # Data is raw (shape: N, 14), need to encode
+            X_raw = np.array(X[seq_start: seq_end])
+            # print(X_raw[0])
+            # encode message
+            X = encode_msgs(X_raw, self.vocab.ENCODING)
         # print(f"lobster_dataloader.py: First loaded message from batch is \n  {X_raw[0]}\n which is \n {X[0]}\nafter encoding.")
 
         
@@ -703,19 +714,39 @@ class LOBSTER(SequenceDataset):
             "return_raw_msgs": False,
             "rand_offset": True,
             "debug_overfit": False,
+            "test_data_dir": None,
+            "data_mode": "preproc",
         }
 
     def setup(self):
         self.n_messages = self.msg_seq_len
-        message_files = sorted(glob(str(self.data_dir) + '/*message*.npy'))
+        message_files = sorted(glob(str(self.data_dir) + '/**/*message*.npy', recursive=True))
         assert len(message_files) > 0, f'no message files found in {self.data_dir}'
         if self.use_book_data:
             # TODO: why does this only work for validation?
             #       can this be variable depending on the dataset?
-            book_files = sorted(glob(str(self.data_dir) + '/*book*.npy'))
+            book_files = sorted(glob(str(self.data_dir) + '/**/*book*.npy', recursive=True))
             assert len(message_files) == len(book_files)
         else:
             book_files = None
+
+        # Check if separate test directory is provided
+        if hasattr(self, 'test_data_dir') and self.test_data_dir is not None:
+            # Load test files from separate directory
+            test_message_files = sorted(glob(str(self.test_data_dir) + '/**/*message*.npy', recursive=True))
+            assert len(test_message_files) > 0, f'no test message files found in {self.test_data_dir}'
+
+            if self.use_book_data:
+                test_book_files = sorted(glob(str(self.test_data_dir) + '/**/*book*.npy', recursive=True))
+                assert len(test_message_files) == len(test_book_files), "Test message and book file counts don't match"
+            else:
+                test_book_files = None
+
+            print(f"[*] Using separate test data: {len(test_message_files)} files from {self.test_data_dir}")
+        else:
+            test_message_files = None
+            test_book_files = None
+
         # raw message files
 
         if self.debug_overfit:
@@ -733,32 +764,47 @@ class LOBSTER(SequenceDataset):
                 self.val_book_files = None
                 self.test_book_files = None
         else:
-            n_test_files = max(1, int(len(message_files) * self.test_split))
-            # train on first part of data
-            self.train_files = message_files[:len(message_files) - n_test_files]
-            # and test on last days
-            self.test_files = message_files[len(self.train_files):]
+            # Determine test files
+            if test_message_files is not None:
+                # Use separate test directory
+                self.test_files = test_message_files
+                self.test_book_files = test_book_files
+                # All message_files are for train/val split
+                train_val_files = message_files
+                train_val_book_files = book_files
+            else:
+                # Split test from train data (old behavior)
+                n_test_files = max(1, int(len(message_files) * self.test_split))
+                train_val_files = message_files[:len(message_files) - n_test_files]
+                self.test_files = message_files[len(train_val_files):]
+
+                if book_files:
+                    train_val_book_files = book_files[:len(book_files) - n_test_files]
+                    self.test_book_files = book_files[len(train_val_book_files):]
+                else:
+                    train_val_book_files = None
+                    self.test_book_files = None
 
             self.rng = random.Random(self.seed)
 
             # TODO: case of raw data but no book data?
 
-            if book_files:
-                self.train_book_files = book_files[:len(book_files) - n_test_files]
-                self.test_book_files = book_files[len(self.train_book_files):]
+            if train_val_book_files:
                 # zip together message and book files to randomly sample together
-                self.train_files = list(zip(self.train_files, self.train_book_files))
+                train_val_combined = list(zip(train_val_files, train_val_book_files))
             else:
+                train_val_combined = train_val_files
                 self.train_book_files = None
                 self.val_book_files = None
-                self.test_book_files = None
 
             # for now, just select (e.g. 10% of) days randomly for validation
             self.val_files = [
-                self.train_files.pop(
-                    self.rng.randrange(0, len(self.train_files))
-                ) for _ in range(int(np.ceil(self.val_split * len(message_files))))]
-            if book_files:
+                train_val_combined.pop(
+                    self.rng.randrange(0, len(train_val_combined))
+                ) for _ in range(int(np.ceil(self.val_split * len(train_val_files))))]
+            self.train_files = train_val_combined
+
+            if train_val_book_files:
                 self.train_files, self.train_book_files = zip(*self.train_files)
                 self.val_files, self.val_book_files = zip(*self.val_files)
         
@@ -777,6 +823,7 @@ class LOBSTER(SequenceDataset):
             book_transform=self.book_transform,
             book_depth=self.book_depth,
             return_raw_msgs=self.return_raw_msgs,
+            data_mode=self.data_mode,
         )
         #self.d_input = self.dataset_train.shape[-1]
         self.d_input = len(self.dataset_train.vocab)
@@ -802,6 +849,7 @@ class LOBSTER(SequenceDataset):
             book_transform=self.book_transform,
             book_depth=self.book_depth,
             return_raw_msgs=self.return_raw_msgs,
+            data_mode=self.data_mode,
         )
 
         self.dataset_test = LOBSTER_Dataset(
@@ -816,6 +864,7 @@ class LOBSTER(SequenceDataset):
             book_transform=self.book_transform,
             book_depth=self.book_depth,
             return_raw_msgs=self.return_raw_msgs,
+            data_mode=self.data_mode,
         )
 
     def reset_train_offsets(self):
@@ -838,6 +887,7 @@ class LOBSTER(SequenceDataset):
             book_transform=self.book_transform,
             book_depth=self.book_depth,
             return_raw_msgs=self.return_raw_msgs,
+            data_mode=self.data_mode,
         )
 
     def __str__(self):

@@ -48,6 +48,11 @@ if __name__ == "__main__":
 						help="wandb entity name, e.g. username")
 	parser.add_argument("--dir_name", type=str, default='./data/LOBS5v2Cached/',
 						help="name of directory where data is cached")
+	parser.add_argument("--test_dir_name", type=str, default=None,
+						help="separate test data directory (if None, split from train data)")
+	parser.add_argument("--data_mode", type=str, choices=['preproc', 'encoded'],
+						default='preproc',
+						help="data loading mode: 'preproc' (encode on-the-fly) or 'encoded' (load pre-encoded data)")
 	parser.add_argument("--dataset", type=str, choices=Datasets.keys(),
 						default='lobster-prediction',
 						help="dataset name")
