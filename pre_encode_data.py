@@ -30,6 +30,7 @@ from functools import partial
 sys.path.insert(0, str(Path(__file__).parent))
 
 from lob.encoding import Vocab, encode_msgs
+from preproc import transform_L2_state  # Fast JAX version instead of slow np.vectorize
 
 
 def encode_message_file(
@@ -75,6 +76,48 @@ def encode_message_file(
         return False, f"Error: {str(e)}"
 
 
+def transform_orderbook_file(
+    input_path: Path,
+    output_path: Path,
+    book_depth: int = 500,
+    tick_size: int = 100
+) -> tuple[bool, str]:
+    """
+    Transform a single orderbook file to volume image representation.
+
+    Args:
+        input_path: Path to input .npy file (raw L2 orderbook)
+        output_path: Path to output .npy file (transformed volume image)
+        book_depth: Number of price levels (default: 500)
+        tick_size: Tick size for price discretization (default: 100)
+
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    try:
+        # Load raw orderbook data
+        book_raw = np.load(input_path, mmap_mode='r')
+
+        # Transform to volume image representation using fast JAX version
+        import jax.numpy as jnp
+        book_raw_jax = jnp.array(book_raw)
+        book_transformed = transform_L2_state(book_raw_jax, book_depth, tick_size)
+
+        # Convert to numpy array and save
+        book_transformed_np = np.array(book_transformed, dtype=np.float32)
+
+        # Create output directory if needed
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Save transformed data
+        np.save(output_path, book_transformed_np)
+
+        return True, f"Transformed {book_raw.shape} → {book_transformed_np.shape}"
+
+    except Exception as e:
+        return False, f"Error: {str(e)}"
+
+
 def copy_or_symlink_file(
     input_path: Path,
     output_path: Path,
@@ -113,12 +156,13 @@ def copy_or_symlink_file(
 
 def process_single_file(args_tuple):
     """Wrapper for multiprocessing."""
-    input_path, output_path, vocab_encoding, is_message_file, use_symlink = args_tuple
+    input_path, output_path, vocab_encoding, is_message_file, book_depth = args_tuple
 
     if is_message_file:
         return input_path, encode_message_file(input_path, output_path, vocab_encoding)
     else:
-        return input_path, copy_or_symlink_file(input_path, output_path, use_symlink)
+        # Transform orderbook file
+        return input_path, transform_orderbook_file(input_path, output_path, book_depth)
 
 
 def pre_encode_directory(
@@ -190,24 +234,24 @@ def pre_encode_directory(
 
         # Only process orderbook files in the first batch (skip_files == 0)
         if skip_files == 0:
-            print(f"  - {len(book_files)} orderbook files to {'symlink' if symlink_books else 'copy'} (first batch only)")
+            print(f"  - {len(book_files)} orderbook files to transform (first batch only)")
         else:
             print(f"  - Skipping orderbook files (processed in first batch)")
             book_files = []  # Skip book files in subsequent batches
     else:
         print(f"  - {len(message_files)} message files to encode")
-        print(f"  - {len(book_files)} orderbook files to {'symlink' if symlink_books else 'copy'}")
+        print(f"  - {len(book_files)} orderbook files to transform")
 
     # Prepare arguments for multiprocessing
     args_list = []
 
     # Message files - need encoding
     for input_file, output_file, _ in message_files:
-        args_list.append((input_file, output_file, vocab.ENCODING, True, symlink_books))
+        args_list.append((input_file, output_file, vocab.ENCODING, True, None))
 
-    # Book files - just copy/symlink (only in first batch when batching)
+    # Book files - need transformation (only in first batch when batching)
     for input_file, output_file, _ in book_files:
-        args_list.append((input_file, output_file, vocab.ENCODING, False, symlink_books))
+        args_list.append((input_file, output_file, vocab.ENCODING, False, 500))
 
     # Process files
     print(f"\nProcessing with {num_workers} workers...")
@@ -314,7 +358,7 @@ Examples:
     print(f"Input directory:  {args.input_dir}")
     print(f"Output directory: {args.output_dir}")
     print(f"Workers:          {args.num_workers}")
-    print(f"Orderbook files:  {'Copy' if args.copy_books else 'Symlink'}")
+    print(f"Orderbook files:  Transform (JAX accelerated)")
     if args.skip_files > 0 or args.max_files is not None:
         print(f"Batch processing: Skip {args.skip_files}, Max {args.max_files if args.max_files else 'all'}")
     print("="*70 + "\n")
