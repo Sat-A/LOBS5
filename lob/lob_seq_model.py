@@ -331,7 +331,42 @@ class FullLobPredModel(nn.Module):
 
         x = self.decoder(x)
         return nn.log_softmax(x, axis=-1)
-    
+
+    def __call_ar_embeddings__(self, x_m, x_b, message_integration_timesteps, book_integration_timesteps):
+        """
+        Return decoder input embeddings instead of logits for CCE.
+
+        This method avoids materializing the full logits tensor for memory efficiency.
+        Note: This model typically uses pooling, but for CCE we may return all embeddings.
+
+        Args:
+             x_m: message input sequence (L_m x d_input)
+             x_b: book state (volume series) (L_b x [P+1])
+             message_integration_timesteps: timesteps for message encoder
+             book_integration_timesteps: timesteps for book encoder
+        Returns:
+            embeddings (float32): decoder input embeddings
+        """
+        # Same forward pass as __call__ but stop before decoder
+        x_m = self.message_encoder(x_m, message_integration_timesteps)
+        x_b = self.book_encoder(x_b, book_integration_timesteps)
+
+        x_m = self.message_out_proj(x_m.T).T
+        x_b = self.book_out_proj(x_b.T).T
+        x = jnp.concatenate([x_m, x_b], axis=1)
+
+        x = self.fused_s5(x, jnp.ones(x.shape[0]))
+
+        # Apply pooling if specified
+        if self.mode in ["pool"]:
+            x = jnp.mean(x, axis=0)
+        elif self.mode in ["last"]:
+            x = x[-1]
+        # For CCE, we might want to keep all tokens (no pooling)
+        # So we could add "none" mode or handle it differently
+
+        # Return embeddings without passing through decoder
+        return x  # shape depends on mode
 
 
 # Here we call vmap to parallelize across a batch of input sequences
@@ -529,23 +564,23 @@ class PaddedLobPredModel(nn.Module):
         (L_m x d_input, L_b x [P+1]) input sequence tuple,
         combining message and book inputs.
         Args:
-             x_m: message input sequence (L_m x d_input, 
+             x_m: message input sequence (L_m x d_input,
              x_b: book state (volume series) (L_b x [P+1])
         Returns:
             output (float32): (d_output)
         """
-        #Uncomment to debug if no longer working in data-loader. 
+        #Uncomment to debug if no longer working in data-loader.
 
         x_m = self.message_encoder(x_m, message_integration_timesteps)
         x_b = self.book_encoder(x_b, book_integration_timesteps)
 
-        #Works because book already repeated when loading data. 
+        #Works because book already repeated when loading data.
         x = jnp.concatenate([x_m, x_b], axis=1)
         # TODO: again, check integration time steps make sense here
         x = self.fused_s5(x, jnp.ones(x.shape[0]))
 
         #Removed the pooling to enable each token to be a target,
-        #  not just a random one in the last message. 
+        #  not just a random one in the last message.
 
         # jax.debug.print("x output shape {}, 1st five: \n {}",x.shape,x[:5,:5])
 
@@ -560,14 +595,55 @@ class PaddedLobPredModel(nn.Module):
             #FIXME: Provide the ntoks argument for averaging as an arg.
         else:
             raise NotImplementedError("Mode must be in ['pool', 'last','none','ema']")
-        
+
         # jax.debug.print("x output shape after pool/last/ema/none shape {}, 1st five: \n {}",x.shape,x[:5,:5])
         x = self.decoder(x)
         # jax.debug.print("x output shape after decoder {}, 1st five: \n {}",x.shape,x[:5,:5])
 
-        
+
         x=nn.log_softmax(x, axis=-1)
         return x
+
+    def __call_ar_embeddings__(self, x_m, x_b, message_integration_timesteps, book_integration_timesteps):
+        """
+        Return decoder input embeddings instead of logits for CCE.
+
+        This method avoids materializing the full (seq_len, vocab_size) logits tensor
+        by returning the embeddings before the decoder layer.
+
+        Args:
+             x_m: message input sequence (L_m x d_input)
+             x_b: book state (volume series) (L_b x [P+1])
+             message_integration_timesteps: timesteps for message encoder
+             book_integration_timesteps: timesteps for book encoder
+        Returns:
+            embeddings (float32): (seq_len, d_model) - decoder input embeddings
+        """
+        # Same forward pass as __call_ar__ but stop before decoder
+        x_m = self.message_encoder(x_m, message_integration_timesteps)
+        x_b = self.book_encoder(x_b, book_integration_timesteps)
+
+        # Concatenate message and book features
+        x = jnp.concatenate([x_m, x_b], axis=1)
+
+        # Pass through fused S5 layers
+        x = self.fused_s5(x, jnp.ones(x.shape[0]))
+
+        # Apply pooling/aggregation if specified (same as __call_ar__)
+        if self.mode in ["pool"]:
+            x = jnp.mean(x, axis=0)
+        elif self.mode in ["last"]:
+            x = x[-1]
+        elif self.mode in ["none"]:
+            pass
+        elif self.mode in ['ema']:
+            x,_=ewma_vectorized_safe(x,2 /(22 + 1.0),jnp.zeros((1,x.shape[1])),jnp.array(1))
+        else:
+            raise NotImplementedError("Mode must be in ['pool', 'last','none','ema']")
+
+        # Return embeddings without passing through decoder
+        # These embeddings will be used by CCE
+        return x  # shape: (seq_len, d_model) or (d_model,) depending on mode
     
     @staticmethod
     def initialize_carry(batch_size, hidden_size,
@@ -614,6 +690,11 @@ BatchPaddedLobPredModel = nn.vmap(
                          'split_rngs':split_rngs_args,
                          'axis_name':'batch'},
             '__call_ar__':{'in_axes':(0, 0, 0, 0),
+                         'out_axes':0,
+                         'variable_axes':variable_axes_args,
+                         'split_rngs':split_rngs_args,
+                         'axis_name':'batch'},
+            '__call_ar_embeddings__':{'in_axes':(0, 0, 0, 0),
                          'out_axes':0,
                          'variable_axes':variable_axes_args,
                          'split_rngs':split_rngs_args,

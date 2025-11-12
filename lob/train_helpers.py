@@ -11,6 +11,12 @@ from typing import Any, Dict, Optional, Tuple, Union
 from lob.encoding import Message_Tokenizer
 import sys
 
+# Import CCE functions
+from lob.cce_jax import (
+    jax_linear_cross_entropy,
+    cce_loss_autoregressive,
+)
+
 # from lob.lob_seq_model import LobPredModel
 
 
@@ -603,44 +609,86 @@ def train_step(
 
     def loss_fn(params):
         # print('checking for compile in loss_fn')
+        # Get embeddings instead of logits using the new method
         if batchnorm:
-            logits, mod_vars = state.apply_fn( 
+            embeddings, mod_vars = state.apply_fn(
                 {"params": params, "batch_stats": state.batch_stats},
                 *batch_inputs, *batch_integration_timesteps,
                 rngs={"dropout": rng},
                 mutable=["intermediates", "batch_stats"],
-                method='__call_ar__'
+                method='__call_ar_embeddings__'  # Changed to get embeddings
             )
         else:
-            logits, mod_vars = state.apply_fn(
+            embeddings, mod_vars = state.apply_fn(
                 {"params": params},
                 *batch_inputs, *batch_integration_timesteps,
                 rngs={"dropout": rng},
                 mutable=["intermediates"],
-                method='__call_ar__'
+                method='__call_ar_embeddings__'  # Changed to get embeddings
             )
 
+        # Get decoder weights for CCE
+        decoder_weight = params['decoder']['kernel']  # shape: (d_model, vocab_size)
+        decoder_bias = params['decoder'].get('bias', None)  # may not exist
 
-        # jax.debug.print("Shape of Logits: {}",logits.shape)
+        # Important: transpose kernel since Flax Dense stores as (in_features, out_features)
+        # but CCE needs (vocab_size, hidden_dim)
+        decoder_weight = decoder_weight.T  # Now shape: (vocab_size, d_model)
+
+        # jax.debug.print("Shape of Embeddings: {}",embeddings.shape)
         # jax.debug.print("Shape of Labels: {}", batch_labels.shape)
 
-        
-        ce=cross_entropy_loss(logits, batch_labels)
+        # Use CCE to compute loss efficiently
+        # embeddings shape: (batch_per_device, seq_len, d_model) or (seq_len, d_model) per sample
+        # batch_labels shape: (batch_per_device, seq_len) or (seq_len,) per sample
+
+        # Check if we have batch dimension
+        if len(embeddings.shape) == 3:
+            # Batched case
+            loss, per_position_loss = cce_loss_autoregressive(
+                embeddings=embeddings,
+                classifier_weight=decoder_weight,
+                targets=batch_labels,
+                classifier_bias=decoder_bias,
+                vocab_block_size=512,
+                return_per_position=True
+            )
+            ce = per_position_loss  # (batch, seq_len)
+        else:
+            # Single sample case (shouldn't happen with pmap but handle it)
+            embeddings = embeddings[None, ...]  # Add batch dimension
+            batch_labels_expanded = batch_labels[None, ...]
+            loss, per_position_loss = cce_loss_autoregressive(
+                embeddings=embeddings,
+                classifier_weight=decoder_weight,
+                targets=batch_labels_expanded,
+                classifier_bias=decoder_bias,
+                vocab_block_size=512,
+                return_per_position=True
+            )
+            ce = per_position_loss[0]  # Remove batch dimension
+
+        # Handle ignore_times (same logic as before)
         if ignore_times:
             ce=ce.reshape(ce.shape[0],-1,Message_Tokenizer.MSG_LEN)
             ce_1=ce[:,:,:TIME_START_I]
             ce_2=ce[:,:,(TIME_END_I+1):]
             ce=np.concatenate([ce_1,ce_2],axis=2)
             ce=ce.reshape(ce.shape[0],-1)
+            # Recompute loss after filtering
+            ce=np.mean(ce,axis=0)
+            loss = np.mean(ce)
+        else:
+            ce=np.mean(ce,axis=0)
+            # loss already computed by CCE
 
-        ce=np.mean(ce,axis=0)
         # jax.debug.print("Shape of CE: {}", ce.shape)
-        # average cross-ent loss
-        loss = np.mean(ce)
         # jax.debug.print("Shape of loss: {}", loss.shape)
-        return loss, (mod_vars, logits,ce)
 
-    (loss, (mod_vars, logits,ce)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+        # Note: We don't return logits anymore since they're not materialized
+        return loss, (mod_vars, ce)  # Removed logits from return
+
+    (loss, (mod_vars, ce)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
 
 
 
@@ -657,7 +705,8 @@ def train_step(
         state = state.apply_gradients(grads=grads)
 
     #return loss, mod_vars, grads, state
-    return state, loss, ce, logits
+    # Note: logits no longer returned since CCE doesn't materialize them
+    return state, loss, ce, None  # Return None for logits to maintain interface
 
 @partial(
     jax.pmap,
