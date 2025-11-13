@@ -208,6 +208,7 @@ eval_local/*
 benchmark_local/*
 jax-traces/*
 core
+**.err
 CCE_INTEGRATION_SUMMARY.md
 CCE_FIX_SUMMARY.md
 CCE_DEBUG_ANALYSIS.md
@@ -215,4 +216,7 @@ CRITICAL_FINDING.md
 DECODER_INIT_FIX.md
 OOM_FIX_SUMMARY.md
 VMAP_FIX_CRITICAL.md
-**.err
+USE_CCE_SWITCH.md
+tensorboard/run_20251113_192447/plugins/profile/2025_11_13_19_26_27/nid010023.trace.json
+tensorboard/run_20251113_192447/plugins/profile/2025_11_13_19_26_27/nid010023.trace.json.gz
+tensorboard/run_20251113_192447/plugins/profile/2025_11_13_19_26_27/nid010023.xplane.pb

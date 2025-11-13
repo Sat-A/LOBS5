@@ -141,7 +141,7 @@ def eval(eval_args):
                                          epoch,
                                          curtail_epoch=args.curtail_epoch,
                                          ignore_times=args.ignore_times,
-                                         apply_method='__call_ar__')
+                                         apply_method='__call_ar_embeddings__')
 
             print(f"[*] Running Epoch {args.restore_step + epoch + 1} Test on train set (With Scan RNN)...")
             test_loss, test_acc, test_ce_by_tok, test_acc_by_tok  = validate(state,

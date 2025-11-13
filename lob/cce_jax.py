@@ -155,6 +155,11 @@ def jax_linear_cross_entropy(
             # Compute block logits
             block_logits = jnp.matmul(embeddings, block_weights.T)
 
+            # DEBUG: Confirm this function is being called and matmul executed
+            jax.debug.print("[CCE BLOCK {}] Computed logits: shape={}, min={:.4f}, max={:.4f}, mean={:.4f}",
+                          block_idx, block_logits.shape,
+                          jnp.min(block_logits), jnp.max(block_logits), jnp.mean(block_logits))
+
             if classifier_bias_padded is not None:
                 block_bias = lax.dynamic_slice(
                     classifier_bias_padded,
@@ -189,10 +194,14 @@ def jax_linear_cross_entropy(
 
         def scan_body(carry, block_idx):
             """Process one block at a time to reduce memory usage by 47x."""
+            jax.debug.print("[CCE SCAN BODY] Processing block {}", block_idx)
             block_logits = compute_block_lse(block_idx)
+            jax.debug.print("[CCE SCAN BODY] Block {} done, logits shape={}", block_idx, block_logits.shape)
             return carry, block_logits
 
+        jax.debug.print("[CCE] BEFORE lax.scan: num_blocks={}", num_blocks)
         _, all_block_logits = lax.scan(scan_body, None, block_indices)
+        jax.debug.print("[CCE] AFTER lax.scan: all_block_logits shape={}", all_block_logits.shape)
         # Shape: (num_blocks, num_tokens, vocab_block_size) - same as vmap
         # Memory: ~47x reduction compared to vmap
 
@@ -207,11 +216,21 @@ def jax_linear_cross_entropy(
         # Compute stable log-sum-exp
         lse = jax.scipy.special.logsumexp(all_block_logits, axis=1)
 
+        # DEBUG: Check LSE values
+        jax.debug.print("[CCE LSE] shape={}, mean={:.4f}, min={:.4f}, max={:.4f}",
+                       lse.shape, jnp.mean(lse), jnp.min(lse), jnp.max(lse))
+
         return lse
 
     # Compute log-sum-exp
     lse = compute_lse_chunked(embeddings, classifier_weight, classifier_bias,
                              vocab_block_size, shift)
+
+    # DEBUG: Check target logits vs LSE
+    jax.debug.print("[CCE] target_logits: mean={:.4f}, min={:.4f}, max={:.4f}",
+                   jnp.mean(target_logits), jnp.min(target_logits), jnp.max(target_logits))
+    jax.debug.print("[CCE] lse: mean={:.4f}, min={:.4f}, max={:.4f}",
+                   jnp.mean(lse), jnp.min(lse), jnp.max(lse))
 
     # ========================================================================
     # Step 3: Compute cross-entropy loss
@@ -220,9 +239,17 @@ def jax_linear_cross_entropy(
     # CE loss = -target_logit + log_sum_exp
     ce_losses = -target_logits + lse  # (num_tokens,)
 
+    # DEBUG: Check CE loss computation
+    jax.debug.print("[CCE] BEFORE mask - ce_losses: mean={:.4f}, min={:.4f}, max={:.4f}",
+                   jnp.mean(ce_losses), jnp.min(ce_losses), jnp.max(ce_losses))
+
     # Handle ignore_index
     mask = (targets != ignore_index).astype(jnp.float32)
     ce_losses = ce_losses * mask
+
+    # DEBUG: Check CE loss after masking
+    jax.debug.print("[CCE] AFTER mask - ce_losses: mean={:.4f}, min={:.4f}, max={:.4f}, num_masked={:.0f}",
+                   jnp.mean(ce_losses), jnp.min(ce_losses), jnp.max(ce_losses), jnp.sum(mask))
 
     # Apply gradient filtering if specified
     if filter_eps is not None:

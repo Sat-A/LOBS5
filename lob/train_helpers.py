@@ -10,6 +10,7 @@ import optax
 from typing import Any, Dict, Optional, Tuple, Union
 from lob.encoding import Message_Tokenizer
 import sys
+import datetime
 
 # Import CCE functions
 from lob.cce_jax import (
@@ -533,13 +534,17 @@ def train_epoch(
     cross_entropies= [] #list of 1xNTok losses 
 
     decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min = lr_params
+    # Initialize profiler path with timestamp for this training run
+    profiler_path = f"/lus/lfs1aip2/home/s5e/kangli.s5e/AlphaTrade/LOBS5/tensorboard/run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
     #with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
     for batch_idx, batch in enumerate(tqdm(trainloader)):
         # print(f"train_epoch: Epoch {epoch} - Batch {batch_idx} / {len(trainloader)}")
         # print(f"train_epoch: Batch input shape: {batch[0].shape}, batch target shape: {batch[1].shape}")
         if not debug_loading:
-            if (step>1) & (step<3) & debug_profiler:
-                jax.profiler.start_trace("/tmp/tensorboard")
+            if (step==2) & debug_profiler:
+                print(f"[PROFILER] Starting profiler at step {step}")
+                print(f"[PROFILER] Output path: {profiler_path}")
+                jax.profiler.start_trace(profiler_path)
             inputs, labels, integration_times = prep_batch(batch, seq_len, num_devices)
             # print("train_epoch: Prepared batch inputs shape:", inputs[0].shape)
             # print("train_epoch: Prepared batch labels shape:", labels.shape)
@@ -581,12 +586,17 @@ def train_epoch(
 
             # losses are already averaged across devices (--> should be all the same here)
             batch_losses.append(loss[0])
+            # Debug: print loss for first few batches
+            if batch_idx < 5:
+                print(f"[DEBUG] Batch {batch_idx}: loss = {loss[0]:.4f}")
             if log_ce_tables:
                 cross_entropies.append(ce)
             lr_params = (decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min)
             state, step = update_learning_rate_per_step(lr_params, state)
-            if (step>20) & (step<=21) & debug_profiler:
+            if (step>=21) & debug_profiler:
+                print(f"[PROFILER] Stopping profiler at step {step}")
                 jax.profiler.stop_trace()
+                print(f"[PROFILER] Profiler trace saved to {profiler_path}/")
                 break
             if (curtail_epochs is not None) and (batch_idx>=curtail_epochs):
                 print("Ending epoch early due to curtail_epochs being ",curtail_epochs)
@@ -603,6 +613,9 @@ def train_epoch(
         ce_means=None
     # jax.debug.print("CE of epoch by token: {}",ce_means.shape)
     loss_mean=np.mean(np.array(batch_losses))
+    print(f"[DEBUG] Epoch loss mean: {loss_mean:.4f} (from {len(batch_losses)} batches)")
+    if len(batch_losses) > 0:
+        print(f"[DEBUG] Batch loss range: min={min(batch_losses):.4f}, max={max(batch_losses):.4f}")
     return state,loss_mean , ce_means,step
 
 
@@ -690,6 +703,14 @@ def train_step(
         jax.debug.print("DEBUG CCE - Labels shape: {}", batch_labels.shape)
         jax.debug.print("DEBUG CCE - Decoder weight shape: {}", decoder_weight.shape)
 
+        # DEBUG: Check actual tensor values to ensure computation is happening
+        jax.debug.print("[DEBUG EMBEDDINGS] mean={:.4f}, std={:.4f}, min={:.4f}, max={:.4f}",
+                       np.mean(embeddings), np.std(embeddings),
+                       np.min(embeddings), np.max(embeddings))
+        jax.debug.print("[DEBUG DECODER] mean={:.4f}, std={:.4f}, min={:.4f}, max={:.4f}",
+                       np.mean(decoder_weight), np.std(decoder_weight),
+                       np.min(decoder_weight), np.max(decoder_weight))
+
         # CRITICAL VALIDATION: Check embeddings shape for autoregressive CCE
         # For autoregressive training, embeddings MUST have shape (batch, seq_len, d_model)
         # If shape is (batch, d_model), it means pooling occurred - this breaks CCE!
@@ -721,9 +742,12 @@ def train_step(
             )
             ce = per_position_loss  # (batch, seq_len)
 
-            # DEBUG: Verify CCE output shapes
+            # DEBUG: Verify CCE output shapes and values
             jax.debug.print("DEBUG CCE - Loss value: {}", loss)
             jax.debug.print("DEBUG CCE - Per-position loss shape: {}", ce.shape)
+            jax.debug.print("[DEBUG LOSS] per_position: mean={:.4f}, min={:.4f}, max={:.4f}, std={:.4f}",
+                           np.mean(per_position_loss), np.min(per_position_loss),
+                           np.max(per_position_loss), np.std(per_position_loss))
 
         else:
             # Single sample case (shouldn't happen with pmap but handle it)
@@ -936,7 +960,7 @@ def validate(state,
              curtail_epoch=None,
              ignore_times: bool =False,
              step_rescale=1.0,
-             apply_method: str ='__call_ar__',
+             apply_method: str ='__call_ar_embeddings__',
              init_hiddens=(np.array([0])),
              log_ce_tables : bool =False):
     """Validation function that loops over batches"""
@@ -1006,17 +1030,31 @@ def eval_step(
 
     batch_inputs=repeat_book(*batch_inputs,True)
 
-    if apply_method == '__call_ar__':
+    if apply_method == '__call_ar_embeddings__':
+        # Get embeddings from model (not logits!)
         if batchnorm:
-            logits = apply_fn({"params": state.params, "batch_stats": state.batch_stats},
+            embeddings = apply_fn({"params": state.params, "batch_stats": state.batch_stats},
                                 *batch_inputs, *batch_integration_timesteps,
                                 method=apply_method,
                                 )
         else:
-            logits = apply_fn({"params": state.params},
+            embeddings = apply_fn({"params": state.params},
                                 *batch_inputs, *batch_integration_timesteps,
                                 method=apply_method,
                                 )
+
+        # Get decoder weights for CCE (same as train_step)
+        decoder_weight = state.params['decoder']['kernel']  # (d_model, vocab_size)
+        decoder_bias = state.params['decoder'].get('bias', None)
+
+        # Transpose to match CCE expected shape: (vocab_size, d_model)
+        decoder_weight = decoder_weight.T
+
+        # For accuracy, compute logits (unavoidable for argmax)
+        logits = np.matmul(embeddings, decoder_weight.T)  # (batch, seq_len, vocab_size)
+        if decoder_bias is not None:
+            logits = logits + decoder_bias
+        logits = jax.nn.log_softmax(logits, axis=-1)  # Convert to log probs
     elif apply_method == '__call_rnn__':
         dones=(np.zeros_like(batch_inputs[0],dtype=bool),)*3
 
@@ -1050,7 +1088,22 @@ def eval_step(
 
 
 
-    losses = cross_entropy_loss(logits, batch_labels)  
+    # Compute losses using CCE for embeddings mode, standard CE for others
+    if apply_method == '__call_ar_embeddings__':
+        # Use CCE for proper loss computation (same as training)
+        loss_scalar, per_position_loss = cce_loss_autoregressive(
+            embeddings=embeddings,
+            classifier_weight=decoder_weight,
+            targets=batch_labels,
+            classifier_bias=decoder_bias,
+            vocab_block_size=256,  # Match training config
+            return_per_position=True
+        )
+        losses = per_position_loss  # (batch, seq_len)
+    else:
+        # Standard CE loss for other methods
+        losses = cross_entropy_loss(logits, batch_labels)
+
     if ignore_times:
         ce=losses
         ce=ce.reshape(ce.shape[0],-1,Message_Tokenizer.MSG_LEN)

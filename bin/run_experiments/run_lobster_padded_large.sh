@@ -45,7 +45,7 @@ echo "[DEBUG ENV] JAX_TRACEBACK_FILTERING=$JAX_TRACEBACK_FILTERING"
 # -B don't write .pyc files
 python3 -u -B run_train.py \
         --C_init=trunc_standard_normal --prenorm=True --batchnorm=False --bidirectional=False \
-        --blocks=16 --bsz=64 --d_model=1024 --dataset=lobster-prediction --merging=padded \
+        --blocks=16 --bsz=40 --d_model=1024 --dataset=lobster-prediction --merging=padded \
         --dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/GOOG2016TO2021' \
         --test_dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/JAN2023/tokenized_lobs5_v2' \
         --data_mode='preproc' \
@@ -64,7 +64,7 @@ python3 -u -B run_train.py \
         --lr_patience=5 \
         --USE_WANDB=True \
         --wandb_project=lobs5-full-autoreg \
-        --wandb_entity=kang-oxford 
+        --wandb_entity=kang-oxford \
         # --wandb_entity=kang-oxford 2>&1 | grep -v "sol_gpu_cost_model"
         # --restore='/lus/lfs1aip2/home/s5e/kangli.s5e/AlphaTrade/LOBS5/checkpoints/ruby-aardvark-62_98nov1i7' \
         # --restore_step=37

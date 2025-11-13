@@ -242,7 +242,7 @@ def train(args):
                                         args.num_devices,
                                         epoch,
                                         curtail_epoch=args.curtail_epochs,
-                                        apply_method='__call_ar__',
+                                        apply_method='__call_ar_embeddings__',
                                         ignore_times=ignore_times,
                                         log_ce_tables=args.log_ce_tables)
 
@@ -258,7 +258,7 @@ def train(args):
                                            args.num_devices,
                                            epoch,
                                            curtail_epoch=args.curtail_epochs,
-                                           apply_method='__call_ar__',
+                                           apply_method='__call_ar_embeddings__',
                                            ignore_times=ignore_times,
                                            log_ce_tables=args.log_ce_tables)
 
