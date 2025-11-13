@@ -611,13 +611,17 @@ class PaddedLobPredModel(nn.Module):
         This method avoids materializing the full (seq_len, vocab_size) logits tensor
         by returning the embeddings before the decoder layer.
 
+        IMPORTANT: For autoregressive CCE training, this method MUST return embeddings
+        for ALL sequence positions. Pooling would collapse the sequence dimension and
+        break CCE's per-token loss computation.
+
         Args:
              x_m: message input sequence (L_m x d_input)
              x_b: book state (volume series) (L_b x [P+1])
              message_integration_timesteps: timesteps for message encoder
              book_integration_timesteps: timesteps for book encoder
         Returns:
-            embeddings (float32): (seq_len, d_model) - decoder input embeddings
+            embeddings (float32): (seq_len, d_model) - decoder input embeddings for ALL positions
         """
         # Same forward pass as __call_ar__ but stop before decoder
         x_m = self.message_encoder(x_m, message_integration_timesteps)
@@ -629,21 +633,19 @@ class PaddedLobPredModel(nn.Module):
         # Pass through fused S5 layers
         x = self.fused_s5(x, jnp.ones(x.shape[0]))
 
-        # Apply pooling/aggregation if specified (same as __call_ar__)
-        if self.mode in ["pool"]:
-            x = jnp.mean(x, axis=0)
-        elif self.mode in ["last"]:
-            x = x[-1]
-        elif self.mode in ["none"]:
-            pass
-        elif self.mode in ['ema']:
-            x,_=ewma_vectorized_safe(x,2 /(22 + 1.0),jnp.zeros((1,x.shape[1])),jnp.array(1))
-        else:
-            raise NotImplementedError("Mode must be in ['pool', 'last','none','ema']")
+        # CRITICAL FIX: For autoregressive CCE training, we MUST preserve sequence dimension
+        # DO NOT apply pooling, even if self.mode is set to 'pool'
+        # CCE requires embeddings for every token position to compute per-token loss
 
-        # Return embeddings without passing through decoder
-        # These embeddings will be used by CCE
-        return x  # shape: (seq_len, d_model) or (d_model,) depending on mode
+        # Original code had pooling logic here, which broke CCE:
+        # if self.mode in ["pool"]: x = jnp.mean(x, axis=0)  # WRONG for CCE!
+
+        # For CCE, we always return the full sequence without pooling
+        # Shape must be (seq_len, d_model) for per-token predictions
+
+        # Return embeddings without passing through decoder and WITHOUT pooling
+        # These embeddings will be used by CCE for per-token loss computation
+        return x  # shape: (seq_len, d_model) - ALWAYS full sequence for autoregressive CCE
     
     @staticmethod
     def initialize_carry(batch_size, hidden_size,

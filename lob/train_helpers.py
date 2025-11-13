@@ -635,25 +635,46 @@ def train_step(
         # but CCE needs (vocab_size, hidden_dim)
         decoder_weight = decoder_weight.T  # Now shape: (vocab_size, d_model)
 
-        # jax.debug.print("Shape of Embeddings: {}",embeddings.shape)
-        # jax.debug.print("Shape of Labels: {}", batch_labels.shape)
+        # DEBUG: Print shapes for verification (can be disabled after testing)
+        jax.debug.print("DEBUG CCE - Embeddings shape: {}", embeddings.shape)
+        jax.debug.print("DEBUG CCE - Labels shape: {}", batch_labels.shape)
+        jax.debug.print("DEBUG CCE - Decoder weight shape: {}", decoder_weight.shape)
+
+        # CRITICAL VALIDATION: Check embeddings shape for autoregressive CCE
+        # For autoregressive training, embeddings MUST have shape (batch, seq_len, d_model)
+        # If shape is (batch, d_model), it means pooling occurred - this breaks CCE!
+        if len(embeddings.shape) == 2:
+            raise ValueError(
+                f"CRITICAL ERROR: Embeddings have wrong shape {embeddings.shape}!\n"
+                f"Expected (batch, seq_len, d_model) for autoregressive CCE.\n"
+                f"Got (batch, d_model) which suggests pooling was incorrectly applied.\n"
+                f"This means __call_ar_embeddings__ is still pooling the sequence.\n"
+                f"Check that mode is NOT set to 'pool' for autoregressive training."
+            )
 
         # Use CCE to compute loss efficiently
-        # embeddings shape: (batch_per_device, seq_len, d_model) or (seq_len, d_model) per sample
-        # batch_labels shape: (batch_per_device, seq_len) or (seq_len,) per sample
+        # embeddings shape: (batch_per_device, seq_len, d_model)
+        # batch_labels shape: (batch_per_device, seq_len)
 
         # Check if we have batch dimension
         if len(embeddings.shape) == 3:
             # Batched case
+            # OPTIMIZATION: Use larger vocab_block_size for large vocabulary (45,056)
+            # Increased from 512 to 2048 for better memory/compute tradeoff
             loss, per_position_loss = cce_loss_autoregressive(
                 embeddings=embeddings,
                 classifier_weight=decoder_weight,
                 targets=batch_labels,
                 classifier_bias=decoder_bias,
-                vocab_block_size=512,
+                vocab_block_size=2048,  # Increased from 512 for better performance
                 return_per_position=True
             )
             ce = per_position_loss  # (batch, seq_len)
+
+            # DEBUG: Verify CCE output shapes
+            jax.debug.print("DEBUG CCE - Loss value: {}", loss)
+            jax.debug.print("DEBUG CCE - Per-position loss shape: {}", ce.shape)
+
         else:
             # Single sample case (shouldn't happen with pmap but handle it)
             embeddings = embeddings[None, ...]  # Add batch dimension
@@ -663,7 +684,7 @@ def train_step(
                 classifier_weight=decoder_weight,
                 targets=batch_labels_expanded,
                 classifier_bias=decoder_bias,
-                vocab_block_size=512,
+                vocab_block_size=2048,  # Increased from 512
                 return_per_position=True
             )
             ce = per_position_loss[0]  # Remove batch dimension
