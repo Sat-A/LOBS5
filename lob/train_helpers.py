@@ -174,13 +174,19 @@ def create_train_state(model_cls,
     init_rng, dropout_rng = jax.random.split(rng, num=2)
     
     jax.debug.print("Dummy input shapes (msg,book) ({}, \n {})",dummy_input[0].shape,dummy_input[1].shape)
-    #RNN mode and initialisation needs to go in here if we need it. 
+    #RNN mode and initialisation needs to go in here if we need it.
 
+    # CRITICAL FIX: Use __call_ar_embeddings__ for initialization to match training method
+    # This avoids JAX allocating memory for both __call_ar__ (with decoder) and
+    # __call_ar_embeddings__ (without decoder). Using __call_ar__ would materialize
+    # full (seq_len, vocab_size) logits during init, causing 93GB memory allocation!
     variables = model.init({"params": init_rng,
                             "dropout": dropout_rng},
                            *dummy_input, *integration_timesteps,
-                           method='__call_ar__' 
+                           method='__call_ar_embeddings__'  # Changed from '__call_ar__'
                            )
+
+    print("Model initialized using __call_ar_embeddings__ method for memory efficiency")
     
     if batchnorm:
         params = variables["params"]#.unfreeze()
