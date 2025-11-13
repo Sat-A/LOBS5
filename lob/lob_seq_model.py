@@ -454,109 +454,118 @@ class PaddedLobPredModel(nn.Module):
         )
         self.decoder = nn.Dense(self.d_output)
 
-    def __call__(self, x_m, x_b, message_integration_timesteps, book_integration_timesteps):
-        """
-        Compute the size d_output log softmax output given a
-        (L_m x d_input, L_b x [P+1]) input sequence tuple,
-        combining message and book inputs.
-        Args:
-             x_m: message input sequence (L_m x d_input, 
-             x_b: book state (volume series) (L_b x [P+1])
-        Returns:
-            output (float32): (d_output)
-        """
-        # jax.debug.print("x_m shape: {}",x_m.shape)
+    # DISABLED: __call__ method removed to prevent XLA from analyzing/tracing it
+    # This method calls self.decoder which materializes full logits (batch × seq × vocab)
+    # Even though not in vmap methods dict, having it as a class method makes it accessible
+    # and XLA might analyze it during compilation, causing memory issues
+    # Use __call_ar_embeddings__ with CCE instead for memory-efficient training
+    # def __call__(self, x_m, x_b, message_integration_timesteps, book_integration_timesteps):
+    #     """
+    #     Compute the size d_output log softmax output given a
+    #     (L_m x d_input, L_b x [P+1]) input sequence tuple,
+    #     combining message and book inputs.
+    #     Args:
+    #          x_m: message input sequence (L_m x d_input,
+    #          x_b: book state (volume series) (L_b x [P+1])
+    #     Returns:
+    #         output (float32): (d_output)
+    #     """
+    #     # jax.debug.print("x_m shape: {}",x_m.shape)
+    #
+    #     #x_b = jnp.repeat(x_b, x_m.shape[0] // x_b.shape[0], axis=0)
+    #     # jax.debug.print("call x_m[0:5] before msg_enc : {}",x_m[0:5])
+    #
+    #     x_m = self.message_encoder(x_m, message_integration_timesteps)
+    #     # jax.debug.print("call x_m[0:5] after msg_enc : {}",x_m[0:5][0])
+    #     x_b = self.book_encoder(x_b, book_integration_timesteps)
+    #
+    #     # repeat book input to match message length
+    #     #Move this repeat to the dataloading and edit so that alignment works with shifted tokens.
+    #     #x_b = jnp.repeat(x_b, x_m.shape[0] // x_b.shape[0], axis=0)
+    #     #REPEAT SHOULD NO LONGER BE NEEDED DUE TO REPEATING HAPPENING IN DATALOADER
+    #
+    #     # token_index = 5 # TODO
+    #
+    #     # # Calculate the repeat counts for each segment
+    #     # K = x_m.shape[0] // x_b.shape[0] # TODO number of tokens in one message
+    #     # repeats = [K - token_index] + [K] * (x_b.shape[0] - 2) + [token_index]
+    #     # x_b = jnp.concatenate([jnp.repeat(x_b[i:i+1], repeats[i], axis=0) for i in range(x_b.shape[0])], axis=0)
+    #
+    #
+    #     x = jnp.concatenate([x_m, x_b], axis=1)
+    #     # TODO: again, check integration time steps make sense here
+    #     x = self.fused_s5(x, jnp.ones(x.shape[0]))
+    #
+    #     jax.debug.print("x output shape {}, 1st five: \n {}",x.shape,x[:5,:5])
+    #
+    #     if self.mode in ["pool"]:
+    #         x = jnp.mean(x, axis=0)
+    #     elif self.mode in ["last"]:
+    #         x = x[-1]
+    #     elif self.mode in ["none"]:
+    #         pass
+    #     elif self.mode in ['ema']:
+    #         x,_=ewma_vectorized_safe(x,2 /(22 + 1.0),jnp.zeros((1,x.shape[1])),jnp.array(1))
+    #         #FIXME: Provide the ntoks argument for averaging as an arg.
+    #     else:
+    #         raise NotImplementedError("Mode must be in ['pool', 'last','none','ema']")
+    #
+    #     jax.debug.print("x output shape after pool/last/ema/none shape {}, 1st five: \n {}",x.shape,x[:5,:5])
+    #     x = self.decoder(x)
+    #     jax.debug.print("x output shape after decoder {}",x.shape,x[:5,:5])
+    #
+    #     return nn.log_softmax(x, axis=-1)
 
-        #x_b = jnp.repeat(x_b, x_m.shape[0] // x_b.shape[0], axis=0)
-        # jax.debug.print("call x_m[0:5] before msg_enc : {}",x_m[0:5])
 
-        x_m = self.message_encoder(x_m, message_integration_timesteps)
-        # jax.debug.print("call x_m[0:5] after msg_enc : {}",x_m[0:5][0])
-        x_b = self.book_encoder(x_b, book_integration_timesteps)
-
-        # repeat book input to match message length
-        #Move this repeat to the dataloading and edit so that alignment works with shifted tokens. 
-        #x_b = jnp.repeat(x_b, x_m.shape[0] // x_b.shape[0], axis=0)
-        #REPEAT SHOULD NO LONGER BE NEEDED DUE TO REPEATING HAPPENING IN DATALOADER
-
-        # token_index = 5 # TODO
-
-        # # Calculate the repeat counts for each segment
-        # K = x_m.shape[0] // x_b.shape[0] # TODO number of tokens in one message
-        # repeats = [K - token_index] + [K] * (x_b.shape[0] - 2) + [token_index]
-        # x_b = jnp.concatenate([jnp.repeat(x_b[i:i+1], repeats[i], axis=0) for i in range(x_b.shape[0])], axis=0)
-        
-            
-        x = jnp.concatenate([x_m, x_b], axis=1)
-        # TODO: again, check integration time steps make sense here
-        x = self.fused_s5(x, jnp.ones(x.shape[0]))
-
-        jax.debug.print("x output shape {}, 1st five: \n {}",x.shape,x[:5,:5])
-
-        if self.mode in ["pool"]:
-            x = jnp.mean(x, axis=0)
-        elif self.mode in ["last"]:
-            x = x[-1]
-        elif self.mode in ["none"]:
-            pass
-        elif self.mode in ['ema']:
-            x,_=ewma_vectorized_safe(x,2 /(22 + 1.0),jnp.zeros((1,x.shape[1])),jnp.array(1))
-            #FIXME: Provide the ntoks argument for averaging as an arg.
-        else:
-            raise NotImplementedError("Mode must be in ['pool', 'last','none','ema']")
-        
-        jax.debug.print("x output shape after pool/last/ema/none shape {}, 1st five: \n {}",x.shape,x[:5,:5])
-        x = self.decoder(x)
-        jax.debug.print("x output shape after decoder {}",x.shape,x[:5,:5])
-
-        return nn.log_softmax(x, axis=-1)
-
-
-    #FOR AR version....
-    def __call_rnn__(self,hiddens_tuple,
-                      x_m, x_b,
-                      d_m, d_b,
-                      d_f,
-                      message_integration_timesteps, book_integration_timesteps):
-        """
-        FOR full output version
-        Compute the size d_output log softmax output given a
-        (L_m x d_input, L_b x [P+1]) input sequence tuple,
-        combining message and book inputs.
-        Args:
-             x_m: message input sequence (L_m x d_input, 
-             x_b: book state (volume series) (L_b x [P+1])
-        Returns:
-            output (float32): (d_output)
-        """
-        hiddens_m, hiddens_b,hiddens_fused,ema = hiddens_tuple
-        fo,override=ema
-
-        # print("Shapes:",x_m.shape,x_b.shape,d_m.shape,d_b.shape)
-
-        # print("Shapes:",x_m.shape,x_b.shape,d_m.shape,d_b.shape)
-
-        hiddens_m,x_m = self.message_encoder.__call_rnn__(hiddens_m, x_m,d_m, message_integration_timesteps)
-        hiddens_b,x_b = self.book_encoder.__call_rnn__(hiddens_b,x_b,d_b ,book_integration_timesteps)
-        x = jnp.concatenate([x_m, x_b], axis=1)
-        # TODO: again, check integration time steps make sense here
-        hiddens_fused,x = self.fused_s5.__call_rnn__(hiddens_fused, x, d_f, jnp.ones(x.shape[0]))
-
-        if self.mode in ["pool"]:
-            x = jnp.mean(x, axis=0)
-        elif self.mode in ["last"]:
-            x = x[-1]
-        elif self.mode in ["none"]:
-            pass
-        elif self.mode in ['ema']:
-             print("x",x)
-             print("ema",ema)
-             x,fo=ewma_vectorized_safe(x,2 /(22 + 1.0),fo,override)
-        else:
-            raise NotImplementedError("Must double check before running rnn")
-
-        x = self.decoder(x)
-        return (hiddens_m, hiddens_b, hiddens_fused, (fo,jnp.zeros_like(override))), nn.log_softmax(x, axis=-1)
+    # DISABLED: __call_rnn__ method removed to prevent XLA from analyzing/tracing it
+    # This method also calls self.decoder which materializes full logits (batch × seq × vocab)
+    # Even though not in vmap methods dict, having it as a class method makes it accessible
+    # and XLA might analyze it during compilation, causing memory issues
+    # Use __call_ar_embeddings__ with CCE instead for memory-efficient training
+    # def __call_rnn__(self,hiddens_tuple,
+    #                   x_m, x_b,
+    #                   d_m, d_b,
+    #                   d_f,
+    #                   message_integration_timesteps, book_integration_timesteps):
+    #     """
+    #     FOR full output version
+    #     Compute the size d_output log softmax output given a
+    #     (L_m x d_input, L_b x [P+1]) input sequence tuple,
+    #     combining message and book inputs.
+    #     Args:
+    #          x_m: message input sequence (L_m x d_input,
+    #          x_b: book state (volume series) (L_b x [P+1])
+    #     Returns:
+    #         output (float32): (d_output)
+    #     """
+    #     hiddens_m, hiddens_b,hiddens_fused,ema = hiddens_tuple
+    #     fo,override=ema
+    #
+    #     # print("Shapes:",x_m.shape,x_b.shape,d_m.shape,d_b.shape)
+    #
+    #     # print("Shapes:",x_m.shape,x_b.shape,d_m.shape,d_b.shape)
+    #
+    #     hiddens_m,x_m = self.message_encoder.__call_rnn__(hiddens_m, x_m,d_m, message_integration_timesteps)
+    #     hiddens_b,x_b = self.book_encoder.__call_rnn__(hiddens_b,x_b,d_b ,book_integration_timesteps)
+    #     x = jnp.concatenate([x_m, x_b], axis=1)
+    #     # TODO: again, check integration time steps make sense here
+    #     hiddens_fused,x = self.fused_s5.__call_rnn__(hiddens_fused, x, d_f, jnp.ones(x.shape[0]))
+    #
+    #     if self.mode in ["pool"]:
+    #         x = jnp.mean(x, axis=0)
+    #     elif self.mode in ["last"]:
+    #         x = x[-1]
+    #     elif self.mode in ["none"]:
+    #         pass
+    #     elif self.mode in ['ema']:
+    #          print("x",x)
+    #          print("ema",ema)
+    #          x,fo=ewma_vectorized_safe(x,2 /(22 + 1.0),fo,override)
+    #     else:
+    #         raise NotImplementedError("Must double check before running rnn")
+    #
+    #     x = self.decoder(x)
+    #     return (hiddens_m, hiddens_b, hiddens_fused, (fo,jnp.zeros_like(override))), nn.log_softmax(x, axis=-1)
 
     # DISABLED: __call_ar__ method removed to avoid XLA allocating memory for unused code path
     # This method materializes full logits which causes 93GB OOM even when not called
@@ -693,6 +702,11 @@ BatchPaddedLobPredModel = nn.vmap(
                          'split_rngs':split_rngs_args,
                          'axis_name':'batch'}})
 
+# Debug: Print model class and methods at module load time
+print(f"[MODEL INIT] BatchPaddedLobPredModel created with type: {type(BatchPaddedLobPredModel)}")
+print(f"[MODEL INIT] Has __call_ar_embeddings__: {hasattr(BatchPaddedLobPredModel, '__call_ar_embeddings__')} (should be True)")
+print(f"[MODEL INIT] Has __call__: {hasattr(BatchPaddedLobPredModel, '__call__')} (should be False - removed)")
+print(f"[MODEL INIT] Has __call_rnn__: {hasattr(BatchPaddedLobPredModel, '__call_rnn__')} (should be False - removed)")
 
 # @partial(
 #     jax.vmap,

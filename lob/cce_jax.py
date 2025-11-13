@@ -59,6 +59,9 @@ def jax_linear_cross_entropy(
         components: (optional) Dict with intermediate values for debugging
     """
 
+    # CRITICAL DEBUG: Confirm CCE is being called
+    jax.debug.callback(lambda: print("[CCE ENTRY] jax_linear_cross_entropy CALLED"))
+
     # Reshape inputs to 2D if needed
     original_shape = embeddings.shape
     if len(embeddings.shape) == 3:
@@ -153,7 +156,10 @@ def jax_linear_cross_entropy(
 
             return block_logits
 
-        # DIAGNOSTIC: Print shapes before vmap
+        # DIAGNOSTIC: Print shapes before vmap - use callback to ensure execution
+        jax.debug.callback(lambda: print(f"[CCE CALLBACK] num_blocks={num_blocks}, num_tokens={num_tokens}, vocab_block_size={vocab_block_size}"))
+        jax.debug.callback(lambda: print(f"[CCE CALLBACK] embeddings shape={embeddings.shape}, classifier_weight shape={classifier_weight.shape}"))
+
         jax.debug.print("CCE vmap - num_blocks: {}, num_tokens: {}, vocab_block_size: {}",
                        num_blocks, num_tokens, vocab_block_size)
         jax.debug.print("CCE vmap - embeddings shape: {}, classifier_weight shape: {}",

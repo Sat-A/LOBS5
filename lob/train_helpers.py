@@ -620,6 +620,9 @@ def repeat_book(msg,book,shift_start):
     #     book=np.concatenate([pad,book[:-1]])
     return (msg,book)
 
+# Pre-compilation debug marker
+print("[PRE-JIT] train_step function being decorated with pmap")
+
 @partial(
     jax.pmap,
     axis_name="batch_devices",
@@ -638,16 +641,20 @@ def train_step(
         ignore_times:bool, #6
     ):
 
-    # Print hash values of static arguments
-    # print(f"batchnorm hash: {batchnorm.__hash__()}")
-    # print(f"ignore_times hash: {ignore_times.__hash__()}")
-    # print('checking for compile in train_step')
+    # Runtime debug - will print during JIT compilation
+    jax.debug.print("[TRAIN_STEP ENTRY] Batch input shapes: msg={}, book={}, labels={}",
+                   batch_inputs[0].shape, batch_inputs[1].shape, batch_labels.shape)
+    jax.debug.print("[TRAIN_STEP ENTRY] batchnorm={}, ignore_times={}", batchnorm, ignore_times)
 
     batch_inputs=repeat_book(*batch_inputs,True)
     # batch_integration_timesteps=repeat_book(*batch_integration_timesteps)
 
     def loss_fn(params):
-        # CRITICAL DEBUG: Verify CCE path is being used
+        # CRITICAL DEBUG: Verify CCE path is being used - use callback to ensure execution
+        jax.debug.callback(lambda: print("=" * 80))
+        jax.debug.callback(lambda: print("[LOSS_FN] LOSS_FN CALLED - Using CCE with __call_ar_embeddings__"))
+        jax.debug.callback(lambda: print("=" * 80))
+
         jax.debug.print("=" * 80)
         jax.debug.print("LOSS_FN CALLED - Using CCE with __call_ar_embeddings__")
         jax.debug.print("=" * 80)

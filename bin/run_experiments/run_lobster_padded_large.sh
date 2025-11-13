@@ -30,9 +30,20 @@
 
 # python3 run_train.py \
 # -u: unbuffered output for real-time logging
+
+# JAX debugging environment variables
+export JAX_LOG_COMPILES=1
+export JAX_TRACEBACK_FILTERING=off
+export JAX_DEBUG_NANS=False
+# Note: XLA dump disabled to avoid excessive disk I/O
+# export XLA_FLAGS="--xla_dump_hlo_as_text --xla_dump_to=/tmp/xla_dump"
+
+echo "[DEBUG ENV] JAX_LOG_COMPILES=$JAX_LOG_COMPILES"
+echo "[DEBUG ENV] JAX_TRACEBACK_FILTERING=$JAX_TRACEBACK_FILTERING"
+
 python3 -u run_train.py \
         --C_init=trunc_standard_normal --prenorm=True --batchnorm=False --bidirectional=False \
-        --blocks=16 --bsz=40 --d_model=1024 --dataset=lobster-prediction --merging=padded \
+        --blocks=16 --bsz=64 --d_model=1024 --dataset=lobster-prediction --merging=padded \
         --dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/GOOG2016TO2021' \
         --test_dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/JAN2023/tokenized_lobs5_v2' \
         --data_mode='preproc' \
