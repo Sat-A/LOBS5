@@ -684,19 +684,10 @@ BatchPaddedLobPredModel = nn.vmap(
     out_axes=0,
     variable_axes=variable_axes_args,
     split_rngs=split_rngs_args, axis_name='batch',
-    methods={'__call__':{'in_axes':(0, 0, 0, 0),
-                         'out_axes':0,
-                         'variable_axes':variable_axes_args,
-                         'split_rngs':split_rngs_args,
-                         'axis_name':'batch'},
-            '__call_rnn__':{'in_axes':(0,0, 0, 0, 0, 0,0,0),
-                         'out_axes':0,
-                         'variable_axes':variable_axes_args,
-                         'split_rngs':split_rngs_args,
-                         'axis_name':'batch'},
-            # REMOVED: '__call_ar__' to prevent XLA from tracing and allocating memory for unused code path
-            # Use '__call_ar_embeddings__' with CCE instead
-            '__call_ar_embeddings__':{'in_axes':(0, 0, 0, 0),
+    # CRITICAL FIX: Only register __call_ar_embeddings__ to prevent XLA from tracing methods that call decoder
+    # Removed: '__call__' and '__call_rnn__' - these materialize full logits and cause 93GB OOM
+    # For CCE training, we ONLY need __call_ar_embeddings__ which returns embeddings without decoder
+    methods={'__call_ar_embeddings__':{'in_axes':(0, 0, 0, 0),
                          'out_axes':0,
                          'variable_axes':variable_axes_args,
                          'split_rngs':split_rngs_args,

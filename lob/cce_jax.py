@@ -153,6 +153,12 @@ def jax_linear_cross_entropy(
 
             return block_logits
 
+        # DIAGNOSTIC: Print shapes before vmap
+        jax.debug.print("CCE vmap - num_blocks: {}, num_tokens: {}, vocab_block_size: {}",
+                       num_blocks, num_tokens, vocab_block_size)
+        jax.debug.print("CCE vmap - embeddings shape: {}, classifier_weight shape: {}",
+                       embeddings.shape, classifier_weight.shape)
+
         # Process all blocks using vmap
         block_indices = jnp.arange(num_blocks)
         all_block_logits = jax.vmap(compute_block_lse)(block_indices)
