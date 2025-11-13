@@ -357,11 +357,15 @@ class FullLobPredModel(nn.Module):
 
         x = self.fused_s5(x, jnp.ones(x.shape[0]))
 
-        # Apply pooling if specified
-        if self.mode in ["pool"]:
-            x = jnp.mean(x, axis=0)
-        elif self.mode in ["last"]:
-            x = x[-1]
+        # # Apply pooling if specified
+        # if self.mode in ["pool"]:
+        #     x = jnp.mean(x, axis=0)
+        # elif self.mode in ["last"]:
+        #     x = x[-1]
+        if self.mode in ["pool","last"]:
+            raise NotImplementedError("Autoregressive model should not use pool or last mode.")
+        
+        
         # For CCE, we might want to keep all tokens (no pooling)
         # So we could add "none" mode or handle it differently
 
