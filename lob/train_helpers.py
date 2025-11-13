@@ -187,13 +187,46 @@ def create_train_state(model_cls,
                            )
 
     print("Model initialized using __call_ar_embeddings__ method for memory efficiency")
-    
+
     if batchnorm:
         params = variables["params"]#.unfreeze()
         batch_stats = variables["batch_stats"]
     else:
         params = variables["params"]#.unfreeze()
         # Note: `unfreeze()` is for using Optax.
+
+    # CRITICAL FIX: Manually initialize decoder params since __call_ar_embeddings__ doesn't reach decoder
+    # The decoder is nn.Dense(d_output) and needs kernel (d_model, d_output) and bias (d_output,)
+    if 'decoder' not in params:
+        print("WARNING: Decoder params not found. Manually initializing decoder...")
+
+        # Get model dimensions
+        d_model = model.d_model
+        d_output = model.d_output
+
+        print(f"Initializing decoder with shape: kernel ({d_model}, {d_output}), bias ({d_output},)")
+
+        # Split RNG for decoder initialization
+        decoder_init_rng = jax.random.split(init_rng)[1]
+
+        # Use standard Flax/JAX initializers
+        # lecun_normal is the default for Dense layers in Flax
+        kernel_init = jax.nn.initializers.lecun_normal()
+        bias_init = jax.nn.initializers.zeros
+
+        # Create decoder parameters
+        decoder_kernel = kernel_init(decoder_init_rng, (d_model, d_output), dtype=np.float32)
+        decoder_bias = bias_init(decoder_init_rng, (d_output,), dtype=np.float32)
+
+        # Add decoder to params dict
+        params['decoder'] = {
+            'kernel': decoder_kernel,
+            'bias': decoder_bias
+        }
+
+        print(f"✓ Decoder params manually initialized: kernel shape {decoder_kernel.shape}, bias shape {decoder_bias.shape}")
+    else:
+        print("✓ Decoder params already exist (unexpected but okay)")
 
     print(params['message_encoder']['encoder']['embedding'].shape)
 
@@ -614,7 +647,11 @@ def train_step(
     # batch_integration_timesteps=repeat_book(*batch_integration_timesteps)
 
     def loss_fn(params):
-        # print('checking for compile in loss_fn')
+        # CRITICAL DEBUG: Verify CCE path is being used
+        jax.debug.print("=" * 80)
+        jax.debug.print("LOSS_FN CALLED - Using CCE with __call_ar_embeddings__")
+        jax.debug.print("=" * 80)
+
         # Get embeddings instead of logits using the new method
         if batchnorm:
             embeddings, mod_vars = state.apply_fn(

@@ -49,8 +49,8 @@ python3 run_train.py \
         --lr_patience=5 \
         --USE_WANDB=True \
         --wandb_project=lobs5-full-autoreg \
-        --wandb_entity=kang-oxford 
-        # --wandb_entity=kang-oxford 2>&1 | grep -v "sol_gpu_cost_model"
+        --wandb_entity=kang-oxford 2>&1 | grep -v "sol_gpu_cost_model"
+        # --wandb_entity=kang-oxford 
         # --restore='/lus/lfs1aip2/home/s5e/kangli.s5e/AlphaTrade/LOBS5/checkpoints/ruby-aardvark-62_98nov1i7' \
         # --restore_step=37
         #--restore='checkpoints/eager-shadow-750_af39bb9u/'
