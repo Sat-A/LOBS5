@@ -127,6 +127,8 @@ if __name__ == "__main__":
 						help="True: use batchnorm, False: use layernorm")
 	parser.add_argument("--bn_momentum", type=float, default=0.95,
 						help="batchnorm momentum")
+	parser.add_argument("--use_cce", type=str2bool, default=True,
+						help="True: use Cut Cross-Entropy (CCE) for memory efficiency, False: use standard CE")
 	parser.add_argument("--bsz", type=int, default=16, #64, (max 16 with full size)
 						help="batch size")
 	parser.add_argument("--num_devices", type=int, default=1,

@@ -523,6 +523,7 @@ def train_epoch(
         epoch,
         ignore_times,
         log_ce_tables,
+        use_cce,
     ):
 
     """
@@ -565,6 +566,7 @@ def train_epoch(
                 integration_times,
                 batchnorm,
                 ignore_times,
+                use_cce,
             )
             if debug_profiler:
                 loss.block_until_ready()
@@ -626,8 +628,8 @@ print("[PRE-JIT] train_step function being decorated with pmap")
 @partial(
     jax.pmap,
     axis_name="batch_devices",
-    static_broadcasted_argnums=(5,6),  # TODO: revert to 5 for batchnorm in pmap
-    in_axes=(0, None, 0, 0, 0, None, None),
+    static_broadcasted_argnums=(5,6,7),  # batchnorm, ignore_times, use_cce
+    in_axes=(0, None, 0, 0, 0, None, None, None),
     # out_axes=(0, 0),
     # devices=global_devices
 )
@@ -639,6 +641,7 @@ def train_step(
         batch_integration_timesteps: Tuple[jax.Array, jax.Array], # 4
         batchnorm: bool, # 5
         ignore_times:bool, #6
+        use_cce: bool, #7
     ):
 
     # Runtime debug - will print during JIT compilation
@@ -650,116 +653,106 @@ def train_step(
     # batch_integration_timesteps=repeat_book(*batch_integration_timesteps)
 
     def loss_fn(params):
-        # CRITICAL DEBUG: Verify CCE path is being used - use callback to ensure execution
-        jax.debug.callback(lambda: print("=" * 80))
-        jax.debug.callback(lambda: print("[LOSS_FN] LOSS_FN CALLED - Using CCE with __call_ar_embeddings__"))
-        jax.debug.callback(lambda: print("=" * 80))
-
-        jax.debug.print("=" * 80)
-        jax.debug.print("LOSS_FN CALLED - Using CCE with __call_ar_embeddings__")
-        jax.debug.print("=" * 80)
-
-        # Get embeddings instead of logits using the new method
-        if batchnorm:
-            embeddings, mod_vars = state.apply_fn(
-                {"params": params, "batch_stats": state.batch_stats},
-                *batch_inputs, *batch_integration_timesteps,
-                rngs={"dropout": rng},
-                mutable=["intermediates", "batch_stats"],
-                method='__call_ar_embeddings__'  # Changed to get embeddings
-            )
+        # Select loss computation mode based on use_cce parameter
+        if use_cce:
+            jax.debug.print("LOSS_FN - Using CCE mode")
         else:
-            embeddings, mod_vars = state.apply_fn(
-                {"params": params},
-                *batch_inputs, *batch_integration_timesteps,
-                rngs={"dropout": rng},
-                mutable=["intermediates"],
-                method='__call_ar_embeddings__'  # Changed to get embeddings
-            )
+            jax.debug.print("LOSS_FN - Using standard CE mode")
 
-        # Get decoder weights for CCE
-        decoder_weight = params['decoder']['kernel']  # shape: (d_model, vocab_size)
-        decoder_bias = params['decoder'].get('bias', None)  # may not exist
-
-        # Important: transpose kernel since Flax Dense stores as (in_features, out_features)
-        # but CCE needs (vocab_size, hidden_dim)
-        decoder_weight = decoder_weight.T  # Now shape: (vocab_size, d_model)
-
-        # DEBUG: Print shapes for verification (can be disabled after testing)
-        jax.debug.print("DEBUG CCE - Embeddings shape: {}", embeddings.shape)
-        jax.debug.print("DEBUG CCE - Labels shape: {}", batch_labels.shape)
-        jax.debug.print("DEBUG CCE - Decoder weight shape: {}", decoder_weight.shape)
-
-        # CRITICAL VALIDATION: Check embeddings shape for autoregressive CCE
-        # For autoregressive training, embeddings MUST have shape (batch, seq_len, d_model)
-        # If shape is (batch, d_model), it means pooling occurred - this breaks CCE!
-        if len(embeddings.shape) == 2:
-            raise ValueError(
-                f"CRITICAL ERROR: Embeddings have wrong shape {embeddings.shape}!\n"
-                f"Expected (batch, seq_len, d_model) for autoregressive CCE.\n"
-                f"Got (batch, d_model) which suggests pooling was incorrectly applied.\n"
-                f"This means __call_ar_embeddings__ is still pooling the sequence.\n"
-                f"Check that mode is NOT set to 'pool' for autoregressive training."
-            )
-
-        # Use CCE to compute loss efficiently
-        # embeddings shape: (batch_per_device, seq_len, d_model)
-        # batch_labels shape: (batch_per_device, seq_len)
-
-        # Check if we have batch dimension
-        if len(embeddings.shape) == 3:
-            # Batched case
-            # MEMORY FIX: Reduced vocab_block_size to avoid XLA compilation OOM
-            # Smaller block size = more blocks but much less memory per block
-            loss, per_position_loss = cce_loss_autoregressive(
-                embeddings=embeddings,
-                classifier_weight=decoder_weight,
-                targets=batch_labels,
-                classifier_bias=decoder_bias,
-                vocab_block_size=256,  # Reduced from 2048 to avoid 93GB OOM during compilation
-                return_per_position=True
-            )
-            ce = per_position_loss  # (batch, seq_len)
-
-            # DEBUG: Verify CCE output shapes
-            jax.debug.print("DEBUG CCE - Loss value: {}", loss)
-            jax.debug.print("DEBUG CCE - Per-position loss shape: {}", ce.shape)
-
+        if use_cce:
+            # CCE mode: Get embeddings instead of logits
+            if batchnorm:
+                embeddings, mod_vars = state.apply_fn(
+                    {"params": params, "batch_stats": state.batch_stats},
+                    *batch_inputs, *batch_integration_timesteps,
+                    rngs={"dropout": rng},
+                    mutable=["intermediates", "batch_stats"],
+                    method='__call_ar_embeddings__'
+                )
+            else:
+                embeddings, mod_vars = state.apply_fn(
+                    {"params": params},
+                    *batch_inputs, *batch_integration_timesteps,
+                    rngs={"dropout": rng},
+                    mutable=["intermediates"],
+                    method='__call_ar_embeddings__'
+                )
         else:
-            # Single sample case (shouldn't happen with pmap but handle it)
-            embeddings = embeddings[None, ...]  # Add batch dimension
-            batch_labels_expanded = batch_labels[None, ...]
-            loss, per_position_loss = cce_loss_autoregressive(
-                embeddings=embeddings,
-                classifier_weight=decoder_weight,
-                targets=batch_labels_expanded,
-                classifier_bias=decoder_bias,
-                vocab_block_size=256,  # Reduced from 2048 to avoid 93GB OOM
-                return_per_position=True
-            )
-            ce = per_position_loss[0]  # Remove batch dimension
+            # Standard CE mode: Get logits directly
+            if batchnorm:
+                logits, mod_vars = state.apply_fn(
+                    {"params": params, "batch_stats": state.batch_stats},
+                    *batch_inputs, *batch_integration_timesteps,
+                    rngs={"dropout": rng},
+                    mutable=["intermediates", "batch_stats"],
+                    method='__call_ar__'
+                )
+            else:
+                logits, mod_vars = state.apply_fn(
+                    {"params": params},
+                    *batch_inputs, *batch_integration_timesteps,
+                    rngs={"dropout": rng},
+                    mutable=["intermediates"],
+                    method='__call_ar__'
+                )
 
-        # Handle ignore_times (same logic as before)
+        if use_cce:
+            # CCE path
+            decoder_weight = params['decoder']['kernel']  # shape: (d_model, vocab_size)
+            decoder_bias = params['decoder'].get('bias', None)
+            decoder_weight = decoder_weight.T  # Now shape: (vocab_size, d_model)
+
+            # Use CCE to compute loss efficiently
+            if len(embeddings.shape) == 3:
+                loss, per_position_loss = cce_loss_autoregressive(
+                    embeddings=embeddings,
+                    classifier_weight=decoder_weight,
+                    targets=batch_labels,
+                    classifier_bias=decoder_bias,
+                    vocab_block_size=256,
+                    return_per_position=True
+                )
+                ce = per_position_loss  # (batch, seq_len)
+            else:
+                # Single sample case
+                embeddings = embeddings[None, ...]
+                batch_labels_expanded = batch_labels[None, ...]
+                loss, per_position_loss = cce_loss_autoregressive(
+                    embeddings=embeddings,
+                    classifier_weight=decoder_weight,
+                    targets=batch_labels_expanded,
+                    classifier_bias=decoder_bias,
+                    vocab_block_size=256,
+                    return_per_position=True
+                )
+                ce = per_position_loss[0]
+        else:
+            # Standard CE path
+            ce = cross_entropy_loss(logits, batch_labels)
+
+        # Handle ignore_times
         if ignore_times:
             ce=ce.reshape(ce.shape[0],-1,Message_Tokenizer.MSG_LEN)
             ce_1=ce[:,:,:TIME_START_I]
             ce_2=ce[:,:,(TIME_END_I+1):]
             ce=np.concatenate([ce_1,ce_2],axis=2)
             ce=ce.reshape(ce.shape[0],-1)
-            # Recompute loss after filtering
-            ce=np.mean(ce,axis=0)
-            loss = np.mean(ce)
+
+        ce=np.mean(ce,axis=0)
+        loss = np.mean(ce)
+
+        if use_cce:
+            # CCE mode: don't return logits (not materialized)
+            return loss, (mod_vars, ce)
         else:
-            ce=np.mean(ce,axis=0)
-            # loss already computed by CCE
+            # Standard CE mode: return logits for compatibility
+            return loss, (mod_vars, logits, ce)
 
-        # jax.debug.print("Shape of CE: {}", ce.shape)
-        # jax.debug.print("Shape of loss: {}", loss.shape)
-
-        # Note: We don't return logits anymore since they're not materialized
-        return loss, (mod_vars, ce)  # Removed logits from return
-
-    (loss, (mod_vars, ce)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+    if use_cce:
+        (loss, (mod_vars, ce)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+        logits = None  # Not materialized in CCE mode
+    else:
+        (loss, (mod_vars, logits, ce)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
 
 
 
@@ -776,8 +769,11 @@ def train_step(
         state = state.apply_gradients(grads=grads)
 
     #return loss, mod_vars, grads, state
-    # Note: logits no longer returned since CCE doesn't materialize them
-    return state, loss, ce, None  # Return None for logits to maintain interface
+    # Return logits based on mode
+    if use_cce:
+        return state, loss, ce, None  # CCE mode: logits not materialized
+    else:
+        return state, loss, ce, logits  # Standard CE mode: return actual logits
 
 @partial(
     jax.pmap,

@@ -211,7 +211,8 @@ def train(args):
                                               init_hidden,
                                               epoch,
                                               ignore_times,
-                                              args.log_ce_tables)
+                                              args.log_ce_tables,
+                                              args.use_cce)
 
         if args.random_offsets_train:
             # reinit training loader, so that sequences are initialised with
