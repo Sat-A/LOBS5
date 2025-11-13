@@ -57,7 +57,7 @@ python3 -u -B run_train.py \
         --masking=none \
         --num_devices=4 --n_data_workers=4 \
         --debug_loading=False \
-        --enable_profiler=False \
+        --enable_profiler=True \
         --random_offsets_train=True \
         --shuffle_train=True \
         --debug_overfit=False \
