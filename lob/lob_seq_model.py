@@ -558,51 +558,54 @@ class PaddedLobPredModel(nn.Module):
         x = self.decoder(x)
         return (hiddens_m, hiddens_b, hiddens_fused, (fo,jnp.zeros_like(override))), nn.log_softmax(x, axis=-1)
 
-    def __call_ar__(self, x_m, x_b, message_integration_timesteps, book_integration_timesteps):
-        """
-        Compute the size d_output log softmax output given a
-        (L_m x d_input, L_b x [P+1]) input sequence tuple,
-        combining message and book inputs.
-        Args:
-             x_m: message input sequence (L_m x d_input,
-             x_b: book state (volume series) (L_b x [P+1])
-        Returns:
-            output (float32): (d_output)
-        """
-        #Uncomment to debug if no longer working in data-loader.
-
-        x_m = self.message_encoder(x_m, message_integration_timesteps)
-        x_b = self.book_encoder(x_b, book_integration_timesteps)
-
-        #Works because book already repeated when loading data.
-        x = jnp.concatenate([x_m, x_b], axis=1)
-        # TODO: again, check integration time steps make sense here
-        x = self.fused_s5(x, jnp.ones(x.shape[0]))
-
-        #Removed the pooling to enable each token to be a target,
-        #  not just a random one in the last message.
-
-        # jax.debug.print("x output shape {}, 1st five: \n {}",x.shape,x[:5,:5])
-
-        if self.mode in ["pool"]:
-            x = jnp.mean(x, axis=0)
-        elif self.mode in ["last"]:
-            x = x[-1]
-        elif self.mode in ["none"]:
-            pass
-        elif self.mode in ['ema']:
-            x,_=ewma_vectorized_safe(x,2 /(22 + 1.0),jnp.zeros((1,x.shape[1])),jnp.array(1))
-            #FIXME: Provide the ntoks argument for averaging as an arg.
-        else:
-            raise NotImplementedError("Mode must be in ['pool', 'last','none','ema']")
-
-        # jax.debug.print("x output shape after pool/last/ema/none shape {}, 1st five: \n {}",x.shape,x[:5,:5])
-        x = self.decoder(x)
-        # jax.debug.print("x output shape after decoder {}, 1st five: \n {}",x.shape,x[:5,:5])
-
-
-        x=nn.log_softmax(x, axis=-1)
-        return x
+    # DISABLED: __call_ar__ method removed to avoid XLA allocating memory for unused code path
+    # This method materializes full logits which causes 93GB OOM even when not called
+    # Use __call_ar_embeddings__ with CCE instead
+    # def __call_ar__(self, x_m, x_b, message_integration_timesteps, book_integration_timesteps):
+    #     """
+    #     Compute the size d_output log softmax output given a
+    #     (L_m x d_input, L_b x [P+1]) input sequence tuple,
+    #     combining message and book inputs.
+    #     Args:
+    #          x_m: message input sequence (L_m x d_input,
+    #          x_b: book state (volume series) (L_b x [P+1])
+    #     Returns:
+    #         output (float32): (d_output)
+    #     """
+    #     #Uncomment to debug if no longer working in data-loader.
+    #
+    #     x_m = self.message_encoder(x_m, message_integration_timesteps)
+    #     x_b = self.book_encoder(x_b, book_integration_timesteps)
+    #
+    #     #Works because book already repeated when loading data.
+    #     x = jnp.concatenate([x_m, x_b], axis=1)
+    #     # TODO: again, check integration time steps make sense here
+    #     x = self.fused_s5(x, jnp.ones(x.shape[0]))
+    #
+    #     #Removed the pooling to enable each token to be a target,
+    #     #  not just a random one in the last message.
+    #
+    #     # jax.debug.print("x output shape {}, 1st five: \n {}",x.shape,x[:5,:5])
+    #
+    #     if self.mode in ["pool"]:
+    #         x = jnp.mean(x, axis=0)
+    #     elif self.mode in ["last"]:
+    #         x = x[-1]
+    #     elif self.mode in ["none"]:
+    #         pass
+    #     elif self.mode in ['ema']:
+    #         x,_=ewma_vectorized_safe(x,2 /(22 + 1.0),jnp.zeros((1,x.shape[1])),jnp.array(1))
+    #         #FIXME: Provide the ntoks argument for averaging as an arg.
+    #     else:
+    #         raise NotImplementedError("Mode must be in ['pool', 'last','none','ema']")
+    #
+    #     # jax.debug.print("x output shape after pool/last/ema/none shape {}, 1st five: \n {}",x.shape,x[:5,:5])
+    #     x = self.decoder(x)
+    #     # jax.debug.print("x output shape after decoder {}, 1st five: \n {}",x.shape,x[:5,:5])
+    #
+    #
+    #     x=nn.log_softmax(x, axis=-1)
+    #     return x
 
     def __call_ar_embeddings__(self, x_m, x_b, message_integration_timesteps, book_integration_timesteps):
         """
@@ -691,11 +694,8 @@ BatchPaddedLobPredModel = nn.vmap(
                          'variable_axes':variable_axes_args,
                          'split_rngs':split_rngs_args,
                          'axis_name':'batch'},
-            '__call_ar__':{'in_axes':(0, 0, 0, 0),
-                         'out_axes':0,
-                         'variable_axes':variable_axes_args,
-                         'split_rngs':split_rngs_args,
-                         'axis_name':'batch'},
+            # REMOVED: '__call_ar__' to prevent XLA from tracing and allocating memory for unused code path
+            # Use '__call_ar_embeddings__' with CCE instead
             '__call_ar_embeddings__':{'in_axes':(0, 0, 0, 0),
                          'out_axes':0,
                          'variable_axes':variable_axes_args,

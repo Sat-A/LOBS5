@@ -702,14 +702,14 @@ def train_step(
         # Check if we have batch dimension
         if len(embeddings.shape) == 3:
             # Batched case
-            # OPTIMIZATION: Use larger vocab_block_size for large vocabulary (45,056)
-            # Increased from 512 to 2048 for better memory/compute tradeoff
+            # MEMORY FIX: Reduced vocab_block_size to avoid XLA compilation OOM
+            # Smaller block size = more blocks but much less memory per block
             loss, per_position_loss = cce_loss_autoregressive(
                 embeddings=embeddings,
                 classifier_weight=decoder_weight,
                 targets=batch_labels,
                 classifier_bias=decoder_bias,
-                vocab_block_size=2048,  # Increased from 512 for better performance
+                vocab_block_size=256,  # Reduced from 2048 to avoid 93GB OOM during compilation
                 return_per_position=True
             )
             ce = per_position_loss  # (batch, seq_len)
@@ -727,7 +727,7 @@ def train_step(
                 classifier_weight=decoder_weight,
                 targets=batch_labels_expanded,
                 classifier_bias=decoder_bias,
-                vocab_block_size=2048,  # Increased from 512
+                vocab_block_size=256,  # Reduced from 2048 to avoid 93GB OOM
                 return_per_position=True
             )
             ce = per_position_loss[0]  # Remove batch dimension
