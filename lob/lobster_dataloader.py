@@ -474,10 +474,10 @@ class LOBSTER_Dataset(Dataset):
             X_raw = None  # Not available in encoded mode unless needed
 
             # Validate shape for encoded data
-            if X.shape[1] != 22:  # Message_Tokenizer.MSG_LEN
+            if X.shape[1] != 24:  # Message_Tokenizer.MSG_LEN updated for base-100 size encoding
                 raise ValueError(
                     f"Pre-encoded message data has {X.shape[1]} tokens per message, "
-                    f"but expected 22. Data may be raw (14 columns) instead of encoded. "
+                    f"but expected 24. Data may be raw (14 columns) instead of encoded. "
                     f"Use data_mode='preproc' for raw data."
                 )
         else:  # data_mode == 'preproc'

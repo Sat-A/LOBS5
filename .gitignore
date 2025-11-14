@@ -208,3 +208,14 @@ eval_local/*
 benchmark_local/*
 jax-traces/*
 core
+**.err
+tensorboard/** 
+CCE_DEBUG_ANALYSIS.md
+CCE_FIX_SUMMARY.md
+CCE_INTEGRATION_SUMMARY.md
+CRITICAL_FINDING.md
+DECODER_INIT_FIX.md
+OOM_FIX_SUMMARY.md
+USE_CCE_SWITCH.md
+VMAP_FIX_CRITICAL.md
+logs_lobs5/new.md

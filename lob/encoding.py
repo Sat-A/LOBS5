@@ -103,9 +103,13 @@ def encode_msg(
     # CAVE: temporary fix to switch tokens for + and - sign
     price_sign = encode(price[0], *encoding['sign'])
     price = encode(price[1], *encoding['price'])
-    
-    size = encode(msg[5], *encoding['size'])
-    
+
+    # Base-100 encoding for size: split into high and low 2-digit parts
+    size_high = msg[5] // 100
+    size_low = msg[5] % 100
+    size_high_enc = encode(size_high, *encoding['size_digit'])
+    size_low_enc = encode(size_low, *encoding['size_digit'])
+
     time_comb = encode_time(
         time_s = msg[8], 
         time_ns = msg[9],
@@ -119,17 +123,23 @@ def encode_msg(
     price_ref_sign = encode(price_ref[0], *encoding['sign'])
     price_ref = encode(price_ref[1], *encoding['price'])
 
-    size_ref = encode(msg[11], *encoding['size'])
+    # Base-100 encoding for size_ref: split into high and low 2-digit parts
+    size_ref_high = msg[11] // 100
+    size_ref_low = msg[11] % 100
+    size_ref_high_enc = encode(size_ref_high, *encoding['size_digit'])
+    size_ref_low_enc = encode(size_ref_low, *encoding['size_digit'])
+
     time_ref_comb = encode_time(
         time_s = msg[12], 
         time_ns = msg[13],
         encoding = encoding
     )
 
+    # Updated output array: size and size_ref are now 2 tokens each
     out = [
-        event_type, direction, price_sign, price, size, time_comb, # delta_t, time_s, time_ns,
-        price_ref_sign, price_ref, size_ref, time_ref_comb]
-    return jnp.hstack(out) # time_s_ref, time_ns_ref])
+        event_type, direction, price_sign, price, size_high_enc, size_low_enc, time_comb,
+        price_ref_sign, price_ref, size_ref_high_enc, size_ref_low_enc, time_ref_comb]
+    return jnp.hstack(out)
 
 
 encode_msgs = jax.jit(jax.vmap(encode_msg, in_axes=(0, None)),backend='cpu')
@@ -160,23 +170,31 @@ def decode_msg(msg_enc, encoding):
     # TODO: check if fields with same decoder can be combined into one decode call
 
     event_type = decode(msg_enc[0], *encoding['event_type'])
-    
+
     direction = decode(msg_enc[1], *encoding['direction'])
 
     price_sign =  decode(msg_enc[2], *encoding['sign'])
     price = decode(msg_enc[3], *encoding['price'])
     price = combine_field(price, 3, price_sign)
 
-    size = decode(msg_enc[4], *encoding['size'])
+    # Base-100 decoding for size: combine high and low 2-digit parts
+    size_high = decode(msg_enc[4], *encoding['size_digit'])
+    size_low = decode(msg_enc[5], *encoding['size_digit'])
+    size = size_high * 100 + size_low
 
-    delta_t_s, delta_t_ns, time_s, time_ns = decode_time(msg_enc[5:14], encoding)
+    # Note: indices shifted by +1 due to size being 2 tokens now
+    delta_t_s, delta_t_ns, time_s, time_ns = decode_time(msg_enc[6:15], encoding)
 
-    price_ref_sign = decode(msg_enc[14], *encoding['sign'])
-    price_ref = decode(msg_enc[15], *encoding['price'])
+    price_ref_sign = decode(msg_enc[15], *encoding['sign'])
+    price_ref = decode(msg_enc[16], *encoding['price'])
     price_ref = combine_field(price_ref, 3, price_ref_sign)
 
-    size_ref = decode(msg_enc[16], *encoding['size'])
-    time_s_ref, time_ns_ref = decode_time(msg_enc[17:22], encoding)
+    # Base-100 decoding for size_ref: combine high and low 2-digit parts
+    size_ref_high = decode(msg_enc[17], *encoding['size_digit'])
+    size_ref_low = decode(msg_enc[18], *encoding['size_digit'])
+    size_ref = size_ref_high * 100 + size_ref_low
+
+    time_s_ref, time_ns_ref = decode_time(msg_enc[19:24], encoding)
 
     # order ID is not encoded, so it's set to NA
     # same for price_abs
@@ -233,7 +251,8 @@ class Vocab:
 
         self._add_field('time', range(1000), [3,6,9,12])
         self._add_field('event_type', range(1,5), None)
-        self._add_field('size', range(10000), [])
+        # Changed: Use base-100 encoding for size (100 tokens instead of 10000)
+        self._add_field('size_digit', range(100), [])  # Shared tokens for size high/low digits
         self._add_field('price', range(1000), [1])
         self._add_field('sign', [-1, 1], None)
         self._add_field('direction', [0, 1], None)
@@ -299,7 +318,9 @@ class Message_Tokenizer:
     FIELD_I = (lambda fields=FIELDS:{
         f: i for i, f in enumerate(fields)
     })()
-    TOK_LENS = np.array((1, 1, 2, 1, 1, 3, 2, 3, 2, 1, 2, 3))
+    # Updated: size and size_ref now use 2 tokens each (base-100 encoding)
+    #          event_type, direction, price(2), size(2), delta_t_s, delta_t_ns(3), time_s(2), time_ns(3), price_ref(2), size_ref(2), time_s_ref(2), time_ns_ref(3)
+    TOK_LENS = np.array((1, 1, 2, 2, 1, 3, 2, 3, 2, 2, 2, 3))
     TOK_DELIM = np.cumsum(TOK_LENS[:-1])
     MSG_LEN = np.sum(TOK_LENS)
     # encoded message length: total length - length of reference fields
