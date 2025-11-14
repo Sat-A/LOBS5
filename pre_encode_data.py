@@ -3,7 +3,7 @@
 Pre-encode LOBSTER data for faster training.
 
 This script processes raw message data (shape: N,14) and encodes it
-using the Vocab encoding to produce pre-encoded data (shape: N,22).
+using the Vocab encoding to produce pre-encoded data (shape: N,24).
 This eliminates the need to encode on-the-fly during training.
 
 Usage:
@@ -43,7 +43,7 @@ def encode_message_file(
 
     Args:
         input_path: Path to input .npy file (shape: N,14)
-        output_path: Path to output .npy file (shape: N,22)
+        output_path: Path to output .npy file (shape: N,24)
         vocab_encoding: The Vocab.ENCODING dictionary
 
     Returns:
@@ -320,7 +320,7 @@ Examples:
         "--output_dir",
         type=str,
         required=True,
-        help="Output directory for encoded data (*.npy files with shape N,22)"
+        help="Output directory for encoded data (*.npy files with shape N,24)"
     )
 
     parser.add_argument(

@@ -365,7 +365,7 @@ class LOBSTER_Dataset(Dataset):
         # Print informative message for pre-encoded mode
         if data_mode == 'encoded':
             print(f"[*] Using pre-encoded data mode")
-            print(f"    - Message: expecting shape (N, 22)")
+            print(f"    - Message: expecting shape (N, 24)")
             if book_transform and book_files is not None:
                 print(f"    - Orderbook: expecting pre-transformed shape (N, {book_depth + 3})")
 
@@ -469,7 +469,7 @@ class LOBSTER_Dataset(Dataset):
 
         # Load and encode data based on data_mode
         if self.data_mode == 'encoded':
-            # Data is already encoded (shape: N, 22), load directly
+            # Data is already encoded (shape: N, 24), load directly
             X = np.array(X[seq_start: seq_end])
             X_raw = None  # Not available in encoded mode unless needed
 
