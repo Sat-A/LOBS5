@@ -603,8 +603,18 @@ def train_step(
 
     def loss_fn(params):
         # print('checking for compile in loss_fn')
+
+        # === Memory Debugging: Print dimensions before forward pass ===
+        jax.debug.print("=== GPU Memory Debug ===")
+        jax.debug.print("Batch size (B): {}", batch_inputs[0].shape[0])
+        jax.debug.print("Sequence length (L): {}", batch_inputs[0].shape[1])
+        jax.debug.print("Input (messages) shape: {}", batch_inputs[0].shape)
+        if len(batch_inputs) > 1:
+            jax.debug.print("Input (book) shape: {}", batch_inputs[1].shape)
+        jax.debug.print("Labels shape: {}", batch_labels.shape)
+
         if batchnorm:
-            logits, mod_vars = state.apply_fn( 
+            logits, mod_vars = state.apply_fn(
                 {"params": params, "batch_stats": state.batch_stats},
                 *batch_inputs, *batch_integration_timesteps,
                 rngs={"dropout": rng},
@@ -621,11 +631,17 @@ def train_step(
             )
 
 
-        # jax.debug.print("Shape of Logits: {}",logits.shape)
-        # jax.debug.print("Shape of Labels: {}", batch_labels.shape)
+        # === Memory Debugging: Print logits dimensions and memory ===
+        jax.debug.print("Logits shape: {}", logits.shape)
+        jax.debug.print("Logits dtype: {}", logits.dtype)
+        # Calculate approximate memory usage (shape[0] * shape[1] * shape[2] * bytes_per_element)
+        jax.debug.print("Logits memory (MB): {}",
+                        logits.shape[0] * logits.shape[1] * logits.shape[2] * 4 / (1024**2))
+        jax.debug.print("Labels shape: {}", batch_labels.shape)
 
-        
+
         ce=cross_entropy_loss(logits, batch_labels)
+        jax.debug.print("CE shape (before reshape): {}", ce.shape)
         if ignore_times:
             ce=ce.reshape(ce.shape[0],-1,Message_Tokenizer.MSG_LEN)
             ce_1=ce[:,:,:TIME_START_I]

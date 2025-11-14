@@ -4,6 +4,7 @@ from jax import random
 import jax.numpy as jnp
 import flax
 import orbax.checkpoint as ocp
+import psutil  # For memory profiling
 
 
 
@@ -168,8 +169,38 @@ def train(args):
     ignore_times=args.ignore_times
     batchnorm=args.batchnorm
 
+    # === Memory Profiling Function ===
+    def log_memory_usage(step_info=""):
+        """Log GPU and system memory usage"""
+        try:
+            process = psutil.Process(os.getpid())
+            cpu_mem_gb = process.memory_info().rss / 1024**3
+            print(f"\n{'='*60}")
+            print(f"Memory Usage {step_info}")
+            print(f"{'='*60}")
+            print(f"CPU Memory: {cpu_mem_gb:.2f} GB")
+
+            # JAX device memory
+            for device in jax.local_devices():
+                try:
+                    stats = device.memory_stats()
+                    if stats:
+                        used_gb = stats['bytes_in_use'] / 1024**3
+                        limit_gb = stats['bytes_limit'] / 1024**3
+                        used_pct = (used_gb / limit_gb) * 100 if limit_gb > 0 else 0
+                        print(f"Device {device.id}: {used_gb:.2f}GB / {limit_gb:.2f}GB ({used_pct:.1f}%)")
+                except Exception as e:
+                    print(f"Device {device}: Memory stats unavailable ({e})")
+            print(f"{'='*60}\n")
+        except Exception as e:
+            print(f"Error logging memory: {e}")
+
+    # Log initial memory state
+    log_memory_usage("(Initial)")
+
     for epoch in range(args.epochs):
         print(f"[*] Starting Training Epoch {epoch + 1}...")
+        log_memory_usage(f"(Start of Epoch {epoch + 1})")
         # jax.profiler.start_trace("./jax-traces")
 
         if epoch < args.warmup_end:
@@ -212,6 +243,8 @@ def train(args):
                                               epoch,
                                               ignore_times,
                                               args.log_ce_tables)
+
+        log_memory_usage(f"(After training epoch {epoch + 1})")
 
         if args.random_offsets_train:
             # reinit training loader, so that sequences are initialised with

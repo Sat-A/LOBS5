@@ -1,5 +1,14 @@
 # CAVE: only for debugging purposes
 import os
+
+# === XLA Memory Debugging Flags ===
+# Uncomment to enable HLO dumping for memory analysis
+# os.environ["XLA_FLAGS"] = (
+#     "--xla_dump_hlo_as_text "
+#     "--xla_dump_to=/tmp/xla_dump "
+#     "--xla_dump_hlo_snapshots"
+# )
+
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=48'
 # no GPU use at all
 #os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
@@ -29,10 +38,18 @@ if __name__ == "__main__":
 	from s5.utils.util import str2bool
 	# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
 	import time
+ 
+	# ······· choice 1 ······· STR
 	time.sleep(1)
-	os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]="0.9"
-	os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true"
+	# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]="0.9"
+	# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true"
 	time.sleep(1)
+	# ······· choice 1 ······· END
+ 
+	# ······· choice 2 ······· STR
+	# allocate and de-allocate memory as needed (SLOW)
+	os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+	# ······· choice 2 ······· END
 
 	#physical_devices = tf.config.list_physical_devices('GPU')
 	#tf.config.experimental.set_memory_growth(physical_devices[0], True)
