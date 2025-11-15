@@ -22,6 +22,7 @@ from lob.dataloading import create_lobster_prediction_dataset, create_lobster_tr
 from lob.lobster_dataloader import LOBSTER_Dataset
 from lob.train_helpers import reduce_lr_on_plateau, linear_warmup, \
     cosine_annealing, constant_lr, train_epoch, validate
+from lob.memory_profiler import print_memory_usage
 
 
 
@@ -58,6 +59,19 @@ def train(args):
     print("[*] Setting Randomness...")
     key = random.PRNGKey(args.jax_seed)
     init_rng, train_rng = random.split(key, num=2)
+
+    # === DEBUG: Test memory_stats() directly in training script ===
+    print("\n[DEBUG] Testing memory_stats() in training context:")
+    test_devices = jax.local_devices()
+    print(f"[DEBUG] Found {len(test_devices)} devices")
+    for i, dev in enumerate(test_devices):
+        test_stats = dev.memory_stats()
+        print(f"[DEBUG] Device {i}: stats type={type(test_stats)}, is_none={test_stats is None}, bool={bool(test_stats)}")
+        if test_stats:
+            print(f"[DEBUG]   Has data! bytes_in_use={test_stats.get('bytes_in_use', 'N/A')}")
+        else:
+            print(f"[DEBUG]   Stats is None or empty!")
+    print("[DEBUG] End of memory_stats() test\n")
 
     # Get dataset creation function
     ds = 'lobster-prediction'
@@ -169,38 +183,12 @@ def train(args):
     ignore_times=args.ignore_times
     batchnorm=args.batchnorm
 
-    # === Memory Profiling Function ===
-    def log_memory_usage(step_info=""):
-        """Log GPU and system memory usage"""
-        try:
-            process = psutil.Process(os.getpid())
-            cpu_mem_gb = process.memory_info().rss / 1024**3
-            print(f"\n{'='*60}")
-            print(f"Memory Usage {step_info}")
-            print(f"{'='*60}")
-            print(f"CPU Memory: {cpu_mem_gb:.2f} GB")
-
-            # JAX device memory
-            for device in jax.local_devices():
-                try:
-                    stats = device.memory_stats()
-                    if stats:
-                        used_gb = stats['bytes_in_use'] / 1024**3
-                        limit_gb = stats['bytes_limit'] / 1024**3
-                        used_pct = (used_gb / limit_gb) * 100 if limit_gb > 0 else 0
-                        print(f"Device {device.id}: {used_gb:.2f}GB / {limit_gb:.2f}GB ({used_pct:.1f}%)")
-                except Exception as e:
-                    print(f"Device {device}: Memory stats unavailable ({e})")
-            print(f"{'='*60}\n")
-        except Exception as e:
-            print(f"Error logging memory: {e}")
-
     # Log initial memory state
-    log_memory_usage("(Initial)")
+    print_memory_usage("Initial")
 
     for epoch in range(args.epochs):
         print(f"[*] Starting Training Epoch {epoch + 1}...")
-        log_memory_usage(f"(Start of Epoch {epoch + 1})")
+        print_memory_usage(f"Start of Epoch {epoch + 1}")
         # jax.profiler.start_trace("./jax-traces")
 
         if epoch < args.warmup_end:
@@ -244,7 +232,7 @@ def train(args):
                                               ignore_times,
                                               args.log_ce_tables)
 
-        log_memory_usage(f"(After training epoch {epoch + 1})")
+        print_memory_usage(f"After training epoch {epoch + 1}")
 
         if args.random_offsets_train:
             # reinit training loader, so that sequences are initialised with

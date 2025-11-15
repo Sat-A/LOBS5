@@ -22,14 +22,20 @@ import os
 
 #os.environ["TF_CPP_MIN_LOG_LEVEL"] = "0"
 # os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".99"
-if __name__ == "__main__":
-	pass
-else:
-	# Forces all generated worker processes to not run on GPU.
-	#  Required at this high level, because the init func in the 
-	# worker spawn interface happens after init. of the CUDA process. 
-	os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-	os.environ["JAX_PLATFORMS"] = "cpu"
+
+
+
+
+# # I do not know if this makes the  stats = devices[0].memory_stats() returns none
+# if __name__ == "__main__":
+# 	pass
+# else:
+# 	# Forces all generated worker processes to not run on GPU.
+# 	#  Required at this high level, because the init func in the 
+# 	# worker spawn interface happens after init. of the CUDA process. 
+# 	os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+# 	os.environ["JAX_PLATFORMS"] = "cpu"
+# # I do not know if this makes the  stats = devices[0].memory_stats() returns none, so I comment out
 
 from lob.dataloading import Datasets
 
@@ -48,7 +54,9 @@ if __name__ == "__main__":
  
 	# ······· choice 2 ······· STR
 	# allocate and de-allocate memory as needed (SLOW)
-	os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+	# NOTE: platform allocator does NOT support memory_stats() API!
+	# Commenting out to enable GPU memory profiling
+	# os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 	# ······· choice 2 ······· END
 
 	#physical_devices = tf.config.list_physical_devices('GPU')

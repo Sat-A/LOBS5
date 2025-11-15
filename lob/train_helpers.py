@@ -9,6 +9,7 @@ from flax import jax_utils
 import optax
 from typing import Any, Dict, Optional, Tuple, Union
 from lob.encoding import Message_Tokenizer
+from lob.memory_profiler import print_memory_usage
 import sys
 
 # from lob.lob_seq_model import LobPredModel
@@ -512,6 +513,11 @@ def train_epoch(
             #     init_hiddens)
 
             # print("Gets to train")
+
+            # === Memory Profiling: Only on first batch ===
+            if batch_idx == 0:
+                print_memory_usage("Before train_step")
+
             state, loss, ce, logits = train_step(
                 state,
                 drop_rng,
@@ -523,6 +529,21 @@ def train_epoch(
             )
             if debug_profiler:
                 loss.block_until_ready()
+
+            # === Memory Profiling: After train_step ===
+            if batch_idx == 0:
+                # Block to ensure computation is complete before measuring
+                loss.block_until_ready()
+                print_memory_usage("After train_step")
+
+                # Log tensor sizes
+                print("\n=== Tensor Sizes ===")
+                print(f"Logits shape: {logits.shape}")
+                print(f"Loss shape: {loss.shape}")
+                print(f"CE shape: {ce.shape}")
+                logits_mb = logits[0].size * logits[0].itemsize / (1024**2)
+                print(f"Logits memory per device: {logits_mb:.2f} MB")
+                print("="*60 + "\n")
             # print("completes train step")
             # if (batch_idx==0) & (epoch%100==0):
             #     np.set_printoptions(threshold=sys.maxsize)
