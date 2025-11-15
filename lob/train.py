@@ -22,7 +22,7 @@ from lob.dataloading import create_lobster_prediction_dataset, create_lobster_tr
 from lob.lobster_dataloader import LOBSTER_Dataset
 from lob.train_helpers import reduce_lr_on_plateau, linear_warmup, \
     cosine_annealing, constant_lr, train_epoch, validate
-from lob.memory_profiler import print_memory_usage
+from lob.memory_profiler import print_memory_usage, detailed_memory_breakdown
 
 
 
@@ -146,6 +146,20 @@ def train(args):
                                                 n_fused_layers=args.n_layers,
                                                 h_size_ema=ssm_size)
     
+    # === Detailed Memory Breakdown ===
+    print("\n" + "="*60)
+    print("Analyzing Memory Composition...")
+    print("="*60)
+    batch_per_gpu = args.bsz // args.num_devices
+    detailed_memory_breakdown(
+        state=state,
+        batch_size_per_gpu=batch_per_gpu,
+        seq_len=seq_len,
+        vocab_size=n_classes,  # d_output
+        d_model=args.d_model,
+        n_layers=args.n_layers
+    )
+
     # Training Loop over epochs
     best_loss, best_acc, best_epoch = 100000000, -100000000.0, 0  # This best loss is val_loss
     count, best_val_loss = 0, 100000000  # This line is for early stopping purposes

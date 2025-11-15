@@ -561,12 +561,21 @@ def train_epoch(
                 cross_entropies.append(ce)
             lr_params = (decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min)
             state, step = update_learning_rate_per_step(lr_params, state)
+
+            # === Memory Profiling: After optimizer update ===
+            if batch_idx == 0:
+                print_memory_usage("After LR update (gradients should be freed)")
             if (step>20) & (step<=21) & debug_profiler:
                 jax.profiler.stop_trace()
                 break
             if (curtail_epochs is not None) and (batch_idx>=curtail_epochs):
                 print("Ending epoch early due to curtail_epochs being ",curtail_epochs)
                 break
+
+            # === Memory Profiling: End of first batch ===
+            if batch_idx == 0:
+                print_memory_usage("End of batch 0 (all operations complete)")
+
         else:
             continue
         

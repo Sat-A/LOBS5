@@ -187,3 +187,80 @@ class MemoryTracker:
             print(f"End:   {end_gb:.2f} GB")
             print(f"Delta: {delta_gb:+.2f} GB")
             print(f"{'='*60}\n")
+
+
+def detailed_memory_breakdown(state, batch_size_per_gpu, seq_len, vocab_size, d_model, n_layers):
+    """
+    Calculate and display detailed memory breakdown for training
+
+    Args:
+        state: TrainState object
+        batch_size_per_gpu: Batch size per GPU device
+        seq_len: Sequence length
+        vocab_size: Vocabulary size
+        d_model: Model dimension
+        n_layers: Number of layers
+    """
+    import jax.tree_util as tree
+
+    print("\n" + "="*60)
+    print("Detailed GPU Memory Breakdown (per GPU)")
+    print("="*60)
+
+    # 1. Model parameters
+    param_leaves = tree.tree_leaves(state.params)
+    param_bytes = sum(x.size * x.itemsize for x in param_leaves if hasattr(x, 'size'))
+    param_mb = param_bytes / 1024**2
+    param_gb = param_bytes / 1024**3
+    print(f"1. Model Parameters: {param_mb:.2f} MB ({param_gb:.3f} GB)")
+
+    # 2. Optimizer state (AdamW has momentum + variance = 2x params)
+    opt_bytes = param_bytes * 2  # AdamW: m and v
+    opt_mb = opt_bytes / 1024**2
+    print(f"2. Optimizer State:  {opt_mb:.2f} MB ({opt_bytes/1024**3:.3f} GB)")
+
+    # 3. Logits
+    logits_bytes = batch_size_per_gpu * seq_len * vocab_size * 4
+    logits_mb = logits_bytes / 1024**2
+    print(f"3. Logits:           {logits_mb:.2f} MB ({logits_bytes/1024**3:.3f} GB)")
+
+    # 4. Book input
+    book_bytes = batch_size_per_gpu * 500 * 503 * 4  # 500 book states, 503 features
+    book_mb = book_bytes / 1024**2
+    print(f"4. Book Input:       {book_mb:.2f} MB ({book_bytes/1024**3:.3f} GB)")
+
+    # 5. Estimated activations (per layer × n_layers)
+    activation_bytes = batch_size_per_gpu * seq_len * d_model * n_layers * 4
+    activation_mb = activation_bytes / 1024**2
+    print(f"5. Activations (~):  {activation_mb:.2f} MB ({activation_bytes/1024**3:.3f} GB)")
+
+    # 6. Estimated gradients (similar to activations)
+    gradient_bytes = activation_bytes
+    gradient_mb = gradient_bytes / 1024**2
+    print(f"6. Gradients (~):    {gradient_mb:.2f} MB ({gradient_bytes/1024**3:.3f} GB)")
+
+    # 7. Total theoretical
+    total_bytes = param_bytes + opt_bytes + logits_bytes + book_bytes + activation_bytes + gradient_bytes
+    total_gb = total_bytes / 1024**3
+    print(f"---")
+    print(f"Theoretical Total:   {total_gb:.2f} GB")
+
+    # Get actual GPU memory usage
+    gpu_stats = jax.local_devices()[0].memory_stats()
+    if gpu_stats:
+        actual_gb = gpu_stats['bytes_in_use'] / 1024**3
+        print(f"Actual GPU Usage:    {actual_gb:.2f} GB")
+        print(f"Difference:          {actual_gb - total_gb:+.2f} GB")
+        print(f"  (includes JAX overhead, buffers, fragmentation)")
+
+    print("="*60 + "\n")
+
+    return {
+        'params_mb': param_mb,
+        'optimizer_mb': opt_mb,
+        'logits_mb': logits_mb,
+        'book_mb': book_mb,
+        'activations_mb': activation_mb,
+        'gradients_mb': gradient_mb,
+        'total_gb': total_gb
+    }
