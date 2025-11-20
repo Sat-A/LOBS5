@@ -40,12 +40,9 @@ import os
 from lob.dataloading import Datasets
 
 if __name__ == "__main__":
-	import argparse
-	from s5.utils.util import str2bool
-	# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
-	import time
  
 	# ······· choice 1 ······· STR
+	import time
 	time.sleep(1)
 	# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]="0.9"
 	# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true"
@@ -68,11 +65,18 @@ if __name__ == "__main__":
 	#tf.config.experimental.set_memory_growth(physical_devices[0], True)
 	#tf.config.experimental.set_visible_devices([], "GPU")
  
-  
+
 	os.environ["NCCL_TIMEOUT"] = "600"  # 10 minutes
 	os.environ["NCCL_IB_DISABLE"] = "0"  # Disable InfiniBand if not used
 	os.environ["NCCL_P2P_DISABLE"] = "0"  # Disable peer-to-peer if causing issues
+ 
+ 
+	os.environ["XLA_FLAGS"] = "--xla_gpu_enable_while_loop_unrolling=false"
 
+
+	import argparse
+	from s5.utils.util import str2bool
+	# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
 
 
 	parser = argparse.ArgumentParser()
