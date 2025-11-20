@@ -1,9 +1,9 @@
-import torch
 from pathlib import Path
-import os
 from typing import Callable, Optional, TypeVar, Dict, Tuple, List, Union
 from s5.dataloading import make_data_loader
 from .lobster_dataloader import LOBSTER, LOBSTER_Dataset, LOBSTER_Sampler
+# from lob.encoding import Message_Tokenizer
+
 
 
 DEFAULT_CACHE_DIR_ROOT = Path('./cache_dir/')
@@ -20,7 +20,7 @@ dataset_fn = Callable[[str, Optional[int], Optional[int]], ReturnType]
 def create_lobster_prediction_dataset(
 		cache_dir: Union[str, Path] = DATA_DIR,
 		seed: int = 42,
-		mask_fn = LOBSTER_Dataset.causal_mask,
+		mask_fn = LOBSTER_Dataset.no_mask,
 		msg_seq_len: int = 500,
 		bsz: int=128,
 		use_book_data: bool = False,
@@ -29,11 +29,22 @@ def create_lobster_prediction_dataset(
 		book_depth: int = 500,
 		n_data_workers: int = 0,
 		return_raw_msgs: bool = False,
+		shuffle_train=True,
+		rand_offset=True,
+		debug_overfit=False,
+		test_dir: Union[str, Path, None] = None,
+		data_mode: str = 'preproc',
 	) -> ReturnType:
 	""" 
 	"""
+	if debug_overfit:
+		rand_offset= False
+		shuffle_train= False
+
 
 	print("[*] Generating LOBSTER Prediction Dataset from", cache_dir)
+	if test_dir is not None:
+		print("[*] Using separate test directory:", test_dir)
 	from .lobster_dataloader import LOBSTER
 	name = 'lobster'
 
@@ -46,10 +57,17 @@ def create_lobster_prediction_dataset(
 		use_simple_book=use_simple_book,
 		book_transform=book_transform,
 		book_depth=book_depth,
-		n_cache_files=1e7,  # large number to keep everything in cache
+		# n_cache_files=1e7,  # large number to keep everything in cache
+  		n_cache_files=250,  # large number to keep everything in cache
 		return_raw_msgs=return_raw_msgs,
+		rand_offset=rand_offset,
+		debug_overfit=debug_overfit,
+		test_data_dir=test_dir,
+		data_mode=data_mode,
 	)
 	dataset_obj.setup()
+ 
+	# breakpoint()
 
 	print("Using mask function:", mask_fn)
 
@@ -58,7 +76,7 @@ def create_lobster_prediction_dataset(
 	#		dataset_obj.dataset_train, n_files_shuffle=5, batch_size=1, seed=seed)
 	
 	trn_loader = create_lobster_train_loader(
-		dataset_obj, seed, bsz, n_data_workers, reset_train_offsets=False)
+		dataset_obj, seed, bsz, n_data_workers, reset_train_offsets=rand_offset,shuffle=shuffle_train)
 	# NOTE: drop_last=True recompiles the model for a smaller batch size
 	val_loader = make_data_loader(
 		dataset_obj.dataset_val, dataset_obj, seed=seed, batch_size=bsz,
@@ -79,7 +97,7 @@ def create_lobster_prediction_dataset(
 	return (dataset_obj, trn_loader, val_loader, tst_loader, aux_loaders, 
 	 		N_CLASSES, SEQ_LENGTH, IN_DIM, BOOK_SEQ_LEN, BOOK_DIM, TRAIN_SIZE)
 
-def create_lobster_train_loader(dataset_obj, seed, bsz, num_workers, reset_train_offsets=False):
+def create_lobster_train_loader(dataset_obj, seed, bsz, num_workers, reset_train_offsets=False,shuffle=True):
 	if reset_train_offsets:
 		dataset_obj.reset_train_offsets()
 	# use sampler to only get individual samples and automatic batching from dataloader
@@ -88,11 +106,25 @@ def create_lobster_train_loader(dataset_obj, seed, bsz, num_workers, reset_train
 		dataset_obj,
 		seed=seed,
 		batch_size=bsz,
-		shuffle=True,  # TODO: remove later
-		num_workers=num_workers)
+		shuffle=shuffle,  # TODO: remove later
+		num_workers=num_workers,
+		worker_init_fn=force_cpu)
 	return trn_loader
 
 Datasets = {
 	# financial data
 	"lobster-prediction": create_lobster_prediction_dataset,
 }
+
+
+def force_cpu(index:int):
+	import os
+	os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+	os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+	import jax
+	jax.config.update('jax_platform_name', 'cpu')
+	# print("turning off cuda")
+	# time.sleep(3)
+	# os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+	# print("done")
+	# time.sleep(3)

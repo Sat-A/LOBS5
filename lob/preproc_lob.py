@@ -11,50 +11,95 @@ from glob import glob
 from decimal import Decimal
 from functools import partial
 # import lob.encoding as encoding
+import os
+os.sys.path.append("/homes/80/kang/LOBS5/")
 
 from lob.encoding import Vocab, Message_Tokenizer
 
 
-@partial(jax.jit, static_argnums=(1, 2))
-@partial(
-    jax.vmap,
-    in_axes=(0, None, None),
-    out_axes=0,
-)
-def transform_L2_state(
-        book: jax.Array, 
-        price_levels: int,
-        tick_size: int = 100,
-        #divide_by: int = 1,
-    ) -> jax.Array:
-    """ Transformation for data loading:
-        Converts L2 book state from data to price_levels many volume
-        series used as input to the model. The first element (column) of the
-        input and output is the change in mid price.
-        Converts sizes to negative sizes for ask side (sell orders).
-    """
-    delta_p_mid, book = book[:1], book[1:]
-    book = book.reshape((-1,2))
-    mid_price = jnp.ceil((book[0, 0] + book[1, 0]) / (2*tick_size)).__mul__(tick_size).astype(int)
-    book = book.at[:, 0].set((book[:, 0] - mid_price) // tick_size)
-    # change relative prices to indices
-    book = book.at[:, 0].set(book[:, 0] + price_levels // 2)
-    # set to out of bounds index, so that we can use -1 to indicate nan
-    # out of bounds will be ignored in setting value in jax
-    book = jnp.where(book < 0, -price_levels-1, book)
 
-    mybook = jnp.zeros(price_levels, dtype=jnp.int32)
-    mybook = mybook.at[book[:, 0]].set(book[:, 1])
+# @partial(jax.jit, static_argnums=(1, 2),backend="cpu")
+# @partial(
+#     jax.vmap,
+#     in_axes=(0, None, None),
+#     out_axes=0,
+# )
+# def transform_L2_state(
+#         book: jax.Array, 
+#         price_levels: int,
+#         tick_size: int = 100,
+#         #divide_by: int = 1,
+#     ) -> jax.Array:
+#     """ Transformation for data loading:
+#         Converts L2 book state from data to price_levels many volume
+#         series used as input to the model. The first element (column) of the
+#         input and output is the change in mid price.
+#         Converts sizes to negative sizes for ask side (sell orders).
+#     """
+#     delta_p_mid_and_time, book = book[:3], book[3:]
+#     book = book.reshape((-1,2))
+#     mid_price = jnp.ceil((book[0, 0] + book[1, 0]) / (2*tick_size)).__mul__(tick_size).astype(int)
+#     book = book.at[:, 0].set((book[:, 0] - mid_price) // tick_size)
+#     # change relative prices to indices
+#     book = book.at[:, 0].set(book[:, 0] + price_levels // 2)
+#     # set to out of bounds index, so that we can use -1 to indicate nan
+#     # out of bounds will be ignored in setting value in jax
+#     book = jnp.where(book < 0, -price_levels-1, book)
+
+#     mybook = jnp.zeros(price_levels, dtype=jnp.int32)
+#     mybook = mybook.at[book[:, 0]].set(book[:, 1])
     
-    # set ask volume to negative (sell orders)
-    mybook = mybook.at[price_levels // 2:].set(mybook[price_levels // 2:] * -1)
-    mybook = jnp.concatenate((
-        delta_p_mid.astype(np.float32),
-        mybook.astype(np.float32) / 1000
-    ))
+#     # set ask volume to negative (sell orders)
+#     mybook = mybook.at[price_levels // 2:].set(mybook[price_levels // 2:] * -1)
+#     mybook = jnp.concatenate((
+#         delta_p_mid_and_time.astype(np.float32),
+#         mybook.astype(np.float32) / 1000
+#     ))
 
-    # return mybook.astype(jnp.float32) #/ divide_by
-    return mybook 
+#     # return mybook.astype(jnp.float32) #/ divide_by
+#     return mybook 
+
+# @partial(jax.jit, static_argnums=(1, 2),backend="gpu")
+# @partial(
+#     jax.vmap,
+#     in_axes=(0, None, None),
+#     out_axes=0,
+# )
+# def transform_L2_state_gpu(
+#         book: jax.Array, 
+#         price_levels: int,
+#         tick_size: int = 100,
+#         #divide_by: int = 1,
+#     ) -> jax.Array:
+#     """ Transformation for data loading:
+#         Converts L2 book state from data to price_levels many volume
+#         series used as input to the model. The first element (column) of the
+#         input and output is the change in mid price.
+#         Converts sizes to negative sizes for ask side (sell orders).
+#     """
+#     delta_p_mid_and_time, book = book[:3], book[3:]
+#     book = book.reshape((-1,2))
+#     mid_price = jnp.ceil((book[0, 0] + book[1, 0]) / (2*tick_size)).__mul__(tick_size).astype(int)
+#     book = book.at[:, 0].set((book[:, 0] - mid_price) // tick_size)
+#     # change relative prices to indices
+#     book = book.at[:, 0].set(book[:, 0] + price_levels // 2)
+#     # set to out of bounds index, so that we can use -1 to indicate nan
+#     # out of bounds will be ignored in setting value in jax
+#     book = jnp.where(book < 0, -price_levels-1, book)
+
+#     mybook = jnp.zeros(price_levels, dtype=jnp.int32)
+#     mybook = mybook.at[book[:, 0]].set(book[:, 1])
+    
+#     # set ask volume to negative (sell orders)
+#     mybook = mybook.at[price_levels // 2:].set(mybook[price_levels // 2:] * -1)
+#     mybook = jnp.concatenate((
+#         delta_p_mid_and_time.astype(np.float32),
+#         mybook.astype(np.float32) / 1000
+#     ))
+
+#     # return mybook.astype(jnp.float32) #/ divide_by
+#     return mybook 
+
 
 
 def load_message_df(m_f: str) -> pd.DataFrame:
@@ -111,6 +156,8 @@ def process_message_files(
             messages, book = filter_by_lvl(messages, book, filter_above_lvl)
         
         print('<< pre processing >>')
+        messages = messages.loc[(messages.time>=Decimal(34200)) & (messages.time<Decimal(57600))]
+        book = book.loc[messages.index]
         m_ = tok.preproc(messages, book)
 
         # save processed messages
@@ -169,6 +216,7 @@ def process_book_files(
 
         # remove disallowed order types
         messages = messages.loc[messages.event_type.isin(allowed_events)]
+        messages = messages.loc[(messages.time>=Decimal(34200)) & (messages.time<Decimal(57600))]
         # make sure book is same length as messages
         book = book.loc[messages.index]
 
@@ -220,9 +268,9 @@ def process_book(
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default='/nfs/home/peern/LOBS5/data/raw/',
+    parser.add_argument("--data_dir", type=str, default='/homes/80/kang/GOOG_2017/',
 		     			help="where to load data from")
-    parser.add_argument("--save_dir", type=str, default='/nfs/home/peern/LOBS5/data/',
+    parser.add_argument("--save_dir", type=str, default='/homes/80/kang/LOBS5/GOOG2017to2019/',
 		     			help="where to save processed data")
     parser.add_argument("--filter_above_lvl", type=int,
                         help="filters down from levels present in the data to specified number of price levels")
@@ -231,7 +279,7 @@ if __name__ == '__main__':
     parser.add_argument("--skip_existing", action='store_true', default=False)
     parser.add_argument("--messages_only", action='store_true', default=False)
     parser.add_argument("--book_only", action='store_true', default=False)
-    parser.add_argument("--use_raw_book_repr", action='store_true', default=False)
+    parser.add_argument("--use_raw_book_repr", action='store_true', default=True)
     args = parser.parse_args()
 
     assert not (args.messages_only and args.book_only)

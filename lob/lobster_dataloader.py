@@ -1,10 +1,12 @@
 """ Datasets for core experimental results """
 from pathlib import Path
 import random
+import re
 import sys
 from typing import Sequence
 import numpy as np
 from collections import OrderedDict
+import math
 
 #import os
 #os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
@@ -13,20 +15,19 @@ from collections import OrderedDict
 #import torchvision
 from torch.utils.data import Dataset, Subset, Sampler
 from glob import glob
-import pandas as pd
-import jax
 # Global flag to set a specific platform, must be used at startup.
-#jax.config.update('jax_platform_name', 'cpu')
-import jax.numpy as jnp
-from jax.nn import one_hot
+# jax.config.update('jax_platform_name', 'cpu')
 
-import lob.encoding as encoding
-from lob.encoding import Vocab, Message_Tokenizer
-from lob.preproc import transform_L2_state
+from lob.encoding import Vocab, Message_Tokenizer,encode_msgs
+from preproc import transform_L2_state,transform_L2_state_numpy
 from s5.dataloaders.base import default_data_path, SequenceDataset
 from s5.utils import permutations
 default_data_path = Path(__file__).parent.parent.absolute()
 default_data_path = default_data_path / "data"
+
+
+import time
+
 
 
 class LOBSTER_Dataset(Dataset):
@@ -64,7 +65,7 @@ class LOBSTER_Dataset(Dataset):
             y = seq[m_i, tok_i]
             seq[m_i, tok_i] = Vocab.MASK_TOK
             return seq, y
-            
+
         return masking_fn
 
     @staticmethod
@@ -115,7 +116,129 @@ class LOBSTER_Dataset(Dataset):
         y = seq[-1, msk_pos]
         seq[-1, msk_pos] = Vocab.MASK_TOK
         seq[-1, hid_pos] = Vocab.HIDDEN_TOK
+
         return seq, y
+    
+    @staticmethod
+    def no_mask(seq,order_books=None):
+        """ Return the whole sequence and a sequence of labels y (which are essentially the sequence)
+        TODO: Need to decide whether to put a 0th element in front for the case of generating 1st token...
+        """
+        seq=seq.copy()
+        # ob_seq=np.repeat(order_books, seq.shape[0] // order_books.shape[0], axis=0)
+        y= seq
+        seq=np.concatenate([[Vocab.START_TOK],
+                            seq[:-1]])
+        # ob_seq=ob_seq[:-1]
+        return (seq,order_books), y
+    
+    @staticmethod
+    def inference_mask(seq,order_books=None):
+        """ Identity function, shouldn't even return the labels.
+        """
+        seq=np.concatenate([[Vocab.START_TOK],seq])
+        return (seq,order_books), np.array(0)
+
+    # @staticmethod
+    # def last_position_mask(seq, rng):
+    #     """
+    #     Selects a field from the latest message where one token is masked with MSK.
+    #     Retains tokens to the left of MSK and removes those to the right, labeled as Q.
+    #     Deletes the first message from all messages, labeled as P.
+    #     Takes tokens to the right of MSK's position in the first message, labeled as O.
+    #     Concatenates O, P, and Q in sequence.
+    #     """
+    #     seq = seq.copy()
+
+    #     # Randomly selects the field to be masked and the hidden field
+    #     hidden_fields, msk_field = LOBSTER_Dataset._select_sequential_causal_mask_no_time(rng)
+
+    #     # Gets the start and end indices of the selected masked field
+    #     i_start, i_end = LOBSTER_Dataset._get_tok_slice_i(msk_field)
+
+    #     # Randomly selects a token within the chosen field for masking
+    #     msk_i = rng.integers(i_start, i_end)
+    #     y = seq[-1][msk_i]
+
+    #     # Q: Keeps tokens to the left of MSK
+    #     Q = seq[-1, :msk_i]
+        
+    #     # Inserts MASK_TOK at the position after the selected token for masking
+    #     Q = jnp.concatenate([Q, jnp.array([Vocab.MASK_TOK])])
+
+    #     # O: Retrieves tokens to the right of MSK's position in the first message
+    #     O = seq[0, msk_i + 1:]
+
+    #     # P: Removes the first message from the sequence
+    #     P = seq[1:]
+
+    #     # Concatenates O, flattened P, and Q
+    #     new_seq = jnp.concatenate([O] + [P.flatten()] + [Q])
+
+    #     return new_seq, y
+
+    # @staticmethod
+    # def last_pos_mask(seq, rng, *args):
+    #     """
+    #     Generates a mask for the last position in the sequence.
+        
+    #     Parameters:
+    #     seq (list or array): The sequence of positions.
+    #     rng (int): The range or length of the sequence.
+    #     *args: Additional arguments (e.g., order books).
+        
+    #     Selects a field from the latest message where one token is masked with MSK.
+    #     Retains tokens to the left of MSK and removes those to the right, labeled as Q.
+    #     Deletes the first message from all messages, labeled as P.
+    #     Takes tokens to the right of MSK's position in the first message, labeled as O.
+    #     Concatenates O, P, and Q in sequence.
+    #     """
+    #     order_books = args[0] if args else None
+
+    #     seq = seq.copy()
+
+    #     # Randomly selects the field to be masked and the hidden field
+    #     hidden_fields, msk_field = LOBSTER_Dataset._select_sequential_causal_mask_no_time(rng)
+
+    #     # Gets the start and end indices of the selected masked field
+    #     i_start, i_end = LOBSTER_Dataset._get_tok_slice_i(msk_field)
+
+    #     # Randomly selects a token within the chosen field for masking
+    #     msk_i = rng.integers(i_start, i_end)
+    #     y = seq[-1][msk_i]
+
+    #     # O: Retrieves tokens to the right of MSK's position in the first message
+    #     O = seq[0, msk_i + 1:]
+    #     # P: Removes the first message from the sequence
+    #     P = seq[1:-1]
+    #     # Q: Keeps tokens to the left of MSK
+    #     Q = seq[-1, :msk_i]
+    #     # Inserts MASK_TOK at the position after the selected token for masking
+    #     Q = jnp.concatenate([Q, jnp.array([Vocab.MASK_TOK])])
+    #     # Concatenates O, flattened P, and Q
+    #     new_seq = jnp.concatenate([O] + [P.flatten()] + [Q])
+
+    #     token_index = msk_i  # Token index used for repetition calculation
+    #     K = P.shape[1]
+    #     # Calculate the repeat counts for each segment
+
+    #     #FIXME: if order_books is None, then this line will FAIL
+    #     repeats = jnp.array([K - token_index] + [K] * (len(order_books) - 2) + [token_index])
+    #     # order_books is in shape (500,501) # TODO should be shape 501*501 ?
+    #     # the repeat should happen in the first dimension and keep the second dimension not changed
+    #     new_ob_O = jnp.repeat(order_books[0:1], repeats[0], axis=0)
+    #     # Use vmap to apply the function across the first axis of order_books_P
+    #     order_books_P = order_books[1:-1]
+    #     new_ob_P = jax.vmap(
+    #         lambda row: jnp.repeat(row[jnp.newaxis, :], K, axis=0), 
+    #         in_axes=(0,),
+    #         )(order_books_P)
+    #     new_ob_P = new_ob_P.reshape(-1, new_ob_P.shape[-1])
+    #     new_ob_Q = jnp.repeat(order_books[-1:], repeats[-1], axis=0)
+    #     new_ob = jnp.concatenate([new_ob_O, new_ob_P, new_ob_Q], axis=0)
+        
+    #     return (new_seq, new_ob), y
+
 
     @staticmethod
     def causal_mask(seq, rng):
@@ -218,10 +341,33 @@ class LOBSTER_Dataset(Dataset):
             # if given, also load and return raw sequences
             # -> used for inference (not training!)
             return_raw_msgs=False,
+            # for inference, the last message is not masked
+            # and hence the book state after the message is
+            # already available (shifts by one)
+            inference=False,
+            limit_seq_per_file=math.inf,
+            # data_mode: 'preproc' (encode on-the-fly) or 'encoded' (load pre-encoded)
+            data_mode='preproc'
             ) -> None:
+
 
         assert len(message_files) > 0
         assert not (use_simple_book and book_transform)
+        assert data_mode in ['preproc', 'encoded'], f"data_mode must be 'preproc' or 'encoded', got '{data_mode}'"
+        assert not (data_mode == 'encoded' and return_raw_msgs), "return_raw_msgs not supported with data_mode='encoded'"
+
+        # shift book state by 1 for inference tasks,
+        # because the most recent message is not masked (=complete)
+        # and the new book state is already available
+        self.inference = inference
+        self.data_mode = data_mode
+
+        # Print informative message for pre-encoded mode
+        if data_mode == 'encoded':
+            print(f"[*] Using pre-encoded data mode")
+            print(f"    - Message: expecting shape (N, 24)")
+            if book_transform and book_files is not None:
+                print(f"    - Orderbook: expecting pre-transformed shape (N, {book_depth + 3})")
 
         self.message_files = message_files #
         if book_files is not None:
@@ -241,16 +387,17 @@ class LOBSTER_Dataset(Dataset):
         self.n_cache_files = n_cache_files
         self._message_cache = OrderedDict()
         self.vocab = Vocab()
-        self.seq_len = self.n_messages * Message_Tokenizer.MSG_LEN
         self.mask_fn = mask_fn
+        if self.mask_fn==LOBSTER_Dataset.no_mask or self.mask_fn==LOBSTER_Dataset.inference_mask:
+            self.seq_len=self.n_messages* Message_Tokenizer.MSG_LEN
+        else:
+            raise NotImplementedError("Need to confirm syntax for other mask funcs to ensure backward compat.")
         self.rng = np.random.default_rng(seed)
-        self.rng_jax = jax.random.PRNGKey(seed)
         self.randomize_offset = randomize_offset
         self._reset_offsets()
         self._set_book_dims()
-
         self._seqs_per_file = np.array(
-            [(self._get_num_rows(f) - self.seq_offsets[i]) // n_messages
+            [min((self._get_num_rows(f) - self.seq_offsets[i]) // n_messages,limit_seq_per_file)
              for i, f in enumerate(message_files)])
         # store at which observations files start
         self._seqs_cumsum = np.concatenate(([0], np.cumsum(self._seqs_per_file)))
@@ -260,18 +407,20 @@ class LOBSTER_Dataset(Dataset):
     def _set_book_dims(self):
         if self.use_book_data:
             if self.book_transform:
-                self.d_book = self.book_depth + 1
+                self.d_book = self.book_depth + 3
             else:
                 b = np.load(self.book_files[0], mmap_mode='r', allow_pickle=True)
                 self.d_book = b.shape[1]
-            # TODO: generalize to L3 data
-            self.L_book = self.n_messages
+            if self.mask_fn==LOBSTER_Dataset.no_mask or self.mask_fn==LOBSTER_Dataset.inference_mask:
+                self.L_book=self.n_messages
+            else:
+                raise NotImplementedError("Need to confirm syntax for other mask funcs to ensure backward compat.")
         else:
             self.d_book = 0
             self.L_book = 0
     
     def _reset_offsets(self):
-        """ drop a random number of messages from the beggining of every file
+        """ drop a random number of messages from the beginning of every file
             so that sequences don't always contain the same time periods
         """
         if self.randomize_offset:
@@ -288,62 +437,120 @@ class LOBSTER_Dataset(Dataset):
     def __len__(self):
         return self._len
 
+
+
     def __getitem__(self, idx):
+        #print(idx)
         if hasattr(idx, '__len__'):
             return list(zip(*[self[i] for i in idx]))
 
         file_idx, seq_idx = self._get_seq_location(idx)
+        # print(f"lobster_dataloader.py: File index is {file_idx}, seq idx is {seq_idx} and offset for file is {self.seq_offsets[file_idx]}")
         
         # load sequence from file directly without cache
         if self.n_cache_files == 0:
             X = np.load(self.message_files[file_idx], mmap_mode='r')
             if self.use_book_data:
-                book = np.load(self.book_files[file_idx], mmap_mode='r')
+                book = np.load(
+                    self.book_files[file_idx],
+                    mmap_mode='r'
+                )
         else:
             if file_idx not in self._message_cache:
                 self._add_to_cache(file_idx)
-
             #print('fetching from cache')
             X = self._message_cache[file_idx]
             if self.use_book_data:
+                # print('fetching book from cache')
                 book = self._book_cache[file_idx]
 
         seq_start = self.seq_offsets[file_idx] + seq_idx * self.n_messages
         seq_end = seq_start + self.n_messages
-        
-        X_raw = jnp.array(X[seq_start: seq_end])
-        # encode message
-        
-        X = encoding.encode_msgs(X_raw, self.vocab.ENCODING)
 
-        # apply mask and extract prediction target token
-        X, y = self.mask_fn(X, self.rng)
-        X, y = X.reshape(-1), y.reshape(-1)
-        # TODO: look into aux_data (could we still use time when available?)
+        # Load and encode data based on data_mode
+        if self.data_mode == 'encoded':
+            # Data is already encoded (shape: N, 24), load directly
+            X = np.array(X[seq_start: seq_end])
+            X_raw = None  # Not available in encoded mode unless needed
 
+            # Validate shape for encoded data
+            if X.shape[1] != 24:  # Message_Tokenizer.MSG_LEN updated for base-100 size encoding
+                raise ValueError(
+                    f"Pre-encoded message data has {X.shape[1]} tokens per message, "
+                    f"but expected 24. Data may be raw (14 columns) instead of encoded. "
+                    f"Use data_mode='preproc' for raw data."
+                )
+        else:  # data_mode == 'preproc'
+            # Data is raw (shape: N, 14), need to encode
+            X_raw = np.array(X[seq_start: seq_end])
+            # print(X_raw[0])
+            # encode message
+            X = encode_msgs(X_raw, self.vocab.ENCODING)
+        # print(f"lobster_dataloader.py: First loaded message from batch is \n  {X_raw[0]}\n which is \n {X[0]}\nafter encoding.")
+
+        
+        
         if self.use_book_data:
             # first message is already dropped, so we can use
             # the book state with the same index (prior to the message)
-            book = book[seq_start: seq_end].copy()#.reshape(-1)
+
+
+            book = book[seq_start: seq_end + self.inference].copy()
+    
             if self.return_raw_msgs:
-                book_l2_init = book[0, 1:].copy()
+                if self.data_mode == 'encoded':
+                    raise NotImplementedError(
+                        "return_raw_msgs not supported with pre-encoded data. "
+                        "Raw messages are not available in encoded mode."
+                    )
+                book_l2_init = book[0, 3:].copy()
 
-            # tranform from L2 (price volume) representation to fixed volume image 
+            # Transform from L2 (price volume) representation to fixed volume image
+            # Skip if data_mode='encoded' and book_transform=True (already transformed)
             if self.book_transform:
-                book = transform_L2_state(book, self.book_depth, 100)
+                if self.data_mode == 'encoded':
+                    # Book data is pre-transformed, validate shape
+                    expected_cols = self.book_depth + 3
+                    if book.shape[1] != expected_cols:
+                        raise ValueError(
+                            f"Pre-encoded book data has shape {book.shape}, but expected "
+                            f"({book.shape[0]}, {expected_cols}) for book_depth={self.book_depth}. "
+                            f"Ensure pre-processing used same book_depth parameter."
+                        )
+                    # Data already transformed, no need to run transform_L2_state_numpy
+                else:  # data_mode == 'preproc'
+                    # Need to transform raw L2 data
+                    book = transform_L2_state_numpy(book, self.book_depth, 100)
 
+            book=np.array(book)
+            # t1=time.time()
             # use raw price, volume series, rather than volume image
             # subtract initial price to start all sequences around 0
-            if self.use_simple_book:
+            # if self.use_simple_book:
                 # CAVE: first column is Delta mid price
                 # p_mid_0 = (book[0, 1] + book[0, 3]) / 2
                 # book[:, 1::2] = (book[:, 1::2] - p_mid_0)
                 # divide volume by 100
                 #book[:, 2::2] = book[:, 2::2] / 100
-                pass
-
+                
+            # apply mask and extract prediction target token
+            
+            
+            X = X.reshape(-1)
+            X, y = self.mask_fn(np.array(X), book)
+            X,book=X
+            # print(book[0])
+            y=y.reshape(-1)
+            
+            # TODO: look into aux_data (could we still use time when available?)
             ret_tuple = X, y, book
+            
         else:
+            # # apply mask and extract prediction target token
+            X = X.reshape(-1)
+            X, y = self.mask_fn(X)
+            X,book=X
+            y=y.reshape(-1)
             ret_tuple = X, y
 
         if self.return_raw_msgs:
@@ -380,7 +587,17 @@ class LOBSTER_Dataset(Dataset):
         file_idx = np.searchsorted(self._seqs_cumsum, idx+1) - 1
         seq_idx = idx - self._seqs_cumsum[file_idx]
         return file_idx, seq_idx
-    
+
+    def get_date(self, idx):
+        if hasattr(idx, '__len__'):
+            return [self.get_date(i) for i in idx]
+        
+        file_idx, _ = self._get_seq_location(idx)
+        file_name = self.message_files[file_idx].rsplit('/', 1)[1]
+        # file name from path -> STOCK_date_xxx
+        # date_str = self.message_files[file_idx].rsplit('/', 1)[1].split('_', 2)[1]
+        date_str = re.search("([0-9]{4}-[0-9]{2}-[0-9]{2})", file_name)[0]
+        return date_str
 
 class LOBSTER_Sampler(Sampler):
     def __init__(self, dset, n_files_shuffle, batch_size=1, seed=None):
@@ -409,7 +626,8 @@ class LOBSTER_Sampler(Sampler):
 
     def __iter__(self):
         # reset days and active indices whenever new iterator is created (e.g. new epoch)
-        self.reset()
+        print("lobster_dataloader.py: omitting the reset function. ")
+        # self.reset()
 
         while len(self.days_unused) > 0 or len(self.active_indices) >= self.batch_size:
             batch = []
@@ -528,80 +746,136 @@ class LOBSTER(SequenceDataset):
             "n_cache_files": 0,
             "book_depth": 500,
             "return_raw_msgs": False,
+            "rand_offset": True,
+            "debug_overfit": False,
+            "test_data_dir": None,
+            "data_mode": "preproc",
         }
 
     def setup(self):
         self.n_messages = self.msg_seq_len
-        message_files = sorted(glob(str(self.data_dir) + '/*message*.npy'))
+        message_files = sorted(glob(str(self.data_dir) + '/**/*message*.npy', recursive=True))
         assert len(message_files) > 0, f'no message files found in {self.data_dir}'
         if self.use_book_data:
             # TODO: why does this only work for validation?
             #       can this be variable depending on the dataset?
-            book_files = sorted(glob(str(self.data_dir) + '/*book*.npy'))
+            book_files = sorted(glob(str(self.data_dir) + '/**/*book*.npy', recursive=True))
             assert len(message_files) == len(book_files)
         else:
             book_files = None
+
+        # Check if separate test directory is provided
+        if hasattr(self, 'test_data_dir') and self.test_data_dir is not None:
+            # Load test files from separate directory
+            test_message_files = sorted(glob(str(self.test_data_dir) + '/**/*message*.npy', recursive=True))
+            assert len(test_message_files) > 0, f'no test message files found in {self.test_data_dir}'
+
+            if self.use_book_data:
+                test_book_files = sorted(glob(str(self.test_data_dir) + '/**/*book*.npy', recursive=True))
+                assert len(test_message_files) == len(test_book_files), "Test message and book file counts don't match"
+            else:
+                test_book_files = None
+
+            print(f"[*] Using separate test data: {len(test_message_files)} files from {self.test_data_dir}")
+        else:
+            test_message_files = None
+            test_book_files = None
+
         # raw message files
 
-        n_test_files = max(1, int(len(message_files) * self.test_split))
+        if self.debug_overfit:
+            # use only one file for train, val, test
+            self.train_files = message_files[:1]
+            self.val_files = message_files[:1]
+            self.test_files = message_files[:1]
 
-        # train on first part of data
-        self.train_files = message_files[:len(message_files) - n_test_files]
-        # and test on last days
-        self.test_files = message_files[len(self.train_files):]
-
-        self.rng = random.Random(self.seed)
-
-        # TODO: case of raw data but no book data?
-
-        if book_files:
-            self.train_book_files = book_files[:len(book_files) - n_test_files]
-            self.test_book_files = book_files[len(self.train_book_files):]
-            # zip together message and book files to randomly sample together
-            self.train_files = list(zip(self.train_files, self.train_book_files))
+            if book_files:
+                self.train_book_files = book_files[:1]
+                self.val_book_files = book_files[:1]
+                self.test_book_files = book_files[:1]
+            else:
+                self.train_book_files = None
+                self.val_book_files = None
+                self.test_book_files = None
         else:
-            self.train_book_files = None
-            self.val_book_files = None
-            self.test_book_files = None
+            # Determine test files
+            if test_message_files is not None:
+                # Use separate test directory
+                self.test_files = test_message_files
+                self.test_book_files = test_book_files
+                # All message_files are for train/val split
+                train_val_files = message_files
+                train_val_book_files = book_files
+            else:
+                # Split test from train data (old behavior)
+                n_test_files = max(1, int(len(message_files) * self.test_split))
+                train_val_files = message_files[:len(message_files) - n_test_files]
+                self.test_files = message_files[len(train_val_files):]
 
-        # for now, just select (e.g. 10% of) days randomly for validation
-        self.val_files = [
-            self.train_files.pop(
-                self.rng.randrange(0, len(self.train_files))
-            ) for _ in range(int(np.ceil(self.val_split * len(message_files))))]
-        if book_files:
-            self.train_files, self.train_book_files = zip(*self.train_files)
-            self.val_files, self.val_book_files = zip(*self.val_files)
+                if book_files:
+                    train_val_book_files = book_files[:len(book_files) - n_test_files]
+                    self.test_book_files = book_files[len(train_val_book_files):]
+                else:
+                    train_val_book_files = None
+                    self.test_book_files = None
+
+            self.rng = random.Random(self.seed)
+
+            # TODO: case of raw data but no book data?
+
+            if train_val_book_files:
+                # zip together message and book files to randomly sample together
+                train_val_combined = list(zip(train_val_files, train_val_book_files))
+            else:
+                train_val_combined = train_val_files
+                self.train_book_files = None
+                self.val_book_files = None
+
+            # for now, just select (e.g. 10% of) days randomly for validation
+            self.val_files = [
+                train_val_combined.pop(
+                    self.rng.randrange(0, len(train_val_combined))
+                ) for _ in range(int(np.ceil(self.val_split * len(train_val_files))))]
+            self.train_files = train_val_combined
+
+            if train_val_book_files:
+                self.train_files, self.train_book_files = zip(*self.train_files)
+                self.val_files, self.val_book_files = zip(*self.val_files)
+        
+
 
         #n_cache_files = 0
         self.dataset_train = LOBSTER_Dataset(
             self.train_files,
             n_messages=self.n_messages,
             mask_fn=self.mask_fn,
-            seed=self.rng.randint(0, sys.maxsize),
+            seed=self.seed if self.debug_overfit else self.rng.randint(0, sys.maxsize),
             n_cache_files=self.n_cache_files,
-            randomize_offset=True,
+            randomize_offset=self.rand_offset,
             book_files=self.train_book_files,
             use_simple_book=self.use_simple_book,
             book_transform=self.book_transform,
             book_depth=self.book_depth,
             return_raw_msgs=self.return_raw_msgs,
+            data_mode=self.data_mode,
         )
         #self.d_input = self.dataset_train.shape[-1]
         self.d_input = len(self.dataset_train.vocab)
         self.d_output = self.d_input
         # sequence length
-        self.L = self.n_messages * Message_Tokenizer.MSG_LEN
+        self.L = self.dataset_train.seq_len
         # book sequence lengths and dimension (number of levels + 1)
         self.L_book = self.dataset_train.L_book
         self.d_book = self.dataset_train.d_book
+
+
 
         #self.split_train_val(self.val_split)
         self.dataset_val = LOBSTER_Dataset(
             self.val_files,
             n_messages=self.n_messages,
             mask_fn=self.mask_fn,
-            seed=self.rng.randint(0, sys.maxsize),
+            seed=self.seed if self.debug_overfit else self.rng.randint(0, sys.maxsize),
             n_cache_files=self.n_cache_files,
             randomize_offset=False,
             book_files=self.val_book_files,
@@ -609,13 +883,14 @@ class LOBSTER(SequenceDataset):
             book_transform=self.book_transform,
             book_depth=self.book_depth,
             return_raw_msgs=self.return_raw_msgs,
+            data_mode=self.data_mode,
         )
 
         self.dataset_test = LOBSTER_Dataset(
             self.test_files,
             n_messages=self.n_messages,
             mask_fn=self.mask_fn,
-            seed=self.rng.randint(0, sys.maxsize),
+            seed=self.seed if self.debug_overfit else self.rng.randint(0, sys.maxsize),
             n_cache_files=self.n_cache_files,
             randomize_offset=False,
             book_files=self.test_book_files,
@@ -623,6 +898,7 @@ class LOBSTER(SequenceDataset):
             book_transform=self.book_transform,
             book_depth=self.book_depth,
             return_raw_msgs=self.return_raw_msgs,
+            data_mode=self.data_mode,
         )
 
     def reset_train_offsets(self):
@@ -645,6 +921,7 @@ class LOBSTER(SequenceDataset):
             book_transform=self.book_transform,
             book_depth=self.book_depth,
             return_raw_msgs=self.return_raw_msgs,
+            data_mode=self.data_mode,
         )
 
     def __str__(self):

@@ -4,7 +4,7 @@ from lob.encoding import Message_Tokenizer, Vocab
 import pandas as pd
 import jax
 from jax import nn
-from jax.random import PRNGKeyArray
+# from jax.random import PRNGKeyArray
 from jax.experimental import checkify
 import chex
 import flax
@@ -19,6 +19,7 @@ debug = lambda *args: logger.debug(' '.join((str(arg) for arg in args)))
 info = lambda *args: logger.info(' '.join((str(arg) for arg in args)))
 
 from lob.lobster_dataloader import LOBSTER_Dataset
+from lob.train_helpers import repeat_book
 
 v = Vocab()
 
@@ -120,6 +121,17 @@ def get_valid_toks_for_input(inp_maybe_batched):
     fields = get_masked_fields(inp_maybe_batched)
     return get_valid_toks_for_field(fields)
 
+def get_first_time(m_seq_cond,encoder):
+    last_msg=m_seq_cond[-Message_Tokenizer.MSG_LEN:]
+    with jax.ensure_compile_time_eval():
+        time_s_start_i, time_s_end_i = get_idx_from_field('time_s')
+        time_ns_start_i, time_ns_end_i = get_idx_from_field('time_ns')
+    time_init_s, time_init_ns = encoding.decode_time(
+        last_msg[time_s_start_i:time_ns_end_i],
+        encoder
+    )
+    return (time_init_s, time_init_ns)
+
 def valid_prediction_mass(pred, fields, top_n=None):
     """ for a predicted distribution over tokens get the total mass of the
         syntactically valid labels
@@ -168,13 +180,11 @@ def pred_rank(pred, labels):
     ranks = np.squeeze(a[..., ::-1].argsort(axis=-1))
     return ranks[correct_mask]
 
-@partial(jax.jit, static_argnums=(2,4))
-def fill_predicted_toks(
-        seq: jax.Array,
+@partial(jax.jit, static_argnums=(1,))
+def fill_predicted_tok(
         pred_logits: jax.Array,
         top_n: int = 1,
-        rng: jax.random.PRNGKeyArray = None,
-        MASK_TOK: int = Vocab.MASK_TOK,
+        rng: Optional[jax.dtypes.prng_key] = None,
     ) -> jax.Array:
     """ Set the predicted token in the given sequence
         when top_n=1, the argmax is used, otherwise a random sample
@@ -185,18 +195,18 @@ def fill_predicted_toks(
         vals = pred_logits.argmax(axis=-1)
     else:
         vals = sample_pred(pred_logits, top_n, rng)
-    return np.where(seq == MASK_TOK, vals, seq)
+    return vals
 
 @partial(jax.jit, static_argnums=(1,))
 @partial(jax.vmap, in_axes=(0, None, 0))
 def sample_pred(
         pred: jax.Array,
         top_n: int,
-        rng: jax.random.PRNGKeyArray
+        rng: jax.dtypes.prng_key
     ) -> jax.Array:
     """ Sample from the top_n predicted labels
     """
-    idx = np.arange(pred.shape[0]).reshape(pred.shape)
+    idx = np.arange(pred.shape[-1]).reshape(pred.shape)
     if top_n > 1 and top_n < pred.shape[-1]:
         mask_top_n = mask_n_highest(pred, top_n)
         p = np.exp(pred) * mask_top_n
@@ -211,6 +221,29 @@ def append_hid_msg(seq):
     """
     l = Message_Tokenizer.MSG_LEN
     return np.concatenate([seq[l:], np.full((Message_Tokenizer.MSG_LEN,), Vocab.HIDDEN_TOK)])
+
+@jax.jit
+def get_to_mask_tok(
+        seq: jax.Array,
+        i: int,
+    ) -> jax.Array:
+    """ Get a message sequence that is ls-l long 
+        and ends with the masked token. 
+        ls: length of the input sequence. 
+        l: length of a single message
+        i: either the position of the masking token from the end (-ve)
+            or the position in the message 
+        
+    """
+    start = jax.lax.cond(
+        i >= 0,
+        lambda x: x,
+        lambda x: x + Message_Tokenizer.MSG_LEN,
+        i,
+    )
+    new_seq=jax.lax.dynamic_slice(seq,(start+1,),(seq.shape[0]- Message_Tokenizer.MSG_LEN,))
+    new_seq=new_seq.at[-1].set(Vocab.MASK_TOK)
+    return new_seq
 
 #@chex.chexify
 @jax.jit
@@ -232,6 +265,27 @@ def mask_last_msg_in_seq(
     y = seq[i]
     return seq.at[i].set(Vocab.MASK_TOK), y
 
+
+@jax.jit
+#@chex.assert_max_traces(n=1)
+def last_token_predict(
+        seq: jax.Array,
+        i: int,
+    ) -> Tuple[jax.Array, jax.Array]:
+    
+    l = Message_Tokenizer.MSG_LEN
+    # slows down execution
+    #checkify.check((i >= -l) & (i < l), "i={} must be in [-MSG_LEN, MSG_LEN)", i)
+    i = jax.lax.cond(
+        i >= 0,
+        lambda x, ls: x + ls - l,
+        lambda x, ls: x,
+        i, seq.shape[0],
+    )
+    new_seq=jax.lax.dynamic_slice(seq,)
+    y = seq[i]
+    return seq.at[i].set(Vocab.MASK_TOK)
+
 @partial(jax.jit, static_argnums=(3, 4))
 def predict(
         batch_inputs: jax.Array,
@@ -243,13 +297,51 @@ def predict(
     if batchnorm:
         logits = model.apply({"params": state.params, "batch_stats": state.batch_stats},
                             *batch_inputs, *batch_integration_timesteps,
+                            method="__call_rnn__",
                             )
     else:
         logits = model.apply({"params": state.params},
                              *batch_inputs, *batch_integration_timesteps,
+                             method="__call_rnn__",
                              )
 
     return logits
+
+
+
+@partial(jax.jit, static_argnums=(4, 5, 6))
+def apply_model(
+        hidden_state: Tuple,
+        m_seq: jax.Array ,
+        b_seq: jax.Array ,
+        state: TrainState,
+        model: flax.linen.Module,
+        batchnorm: bool,
+        shift_start: bool,
+    ):
+    batch_inputs = (
+        np.expand_dims(m_seq, axis=0),
+        np.expand_dims(b_seq, axis=0))
+    batch_integration_timesteps = (
+        np.ones((1, len(m_seq))), 
+        np.ones((1, len(m_seq)))
+    )
+    batch_inputs=repeat_book(*batch_inputs,shift_start)
+
+    dones=(np.zeros_like(batch_inputs[0],dtype=bool),)*(len(hidden_state)-1)
+    if batchnorm:
+        hidden_state,logits = model.apply({"params": state.params, "batch_stats": state.batch_stats},
+                            hidden_state,*batch_inputs, *dones, *batch_integration_timesteps,
+                            method="__call_rnn__"
+                            )
+    else:
+        hidden_state,logits = model.apply({"params": state.params},
+                             hidden_state,*batch_inputs, *dones, *batch_integration_timesteps,
+                             method="__call_rnn__"
+                             )
+
+    return hidden_state,logits
+
 
 @jax.jit
 def filter_valid_pred(
@@ -310,7 +402,7 @@ def pred_next_tok(
         logits = filter_valid_pred(logits, valid_mask)
     # update sequence
     # note: rng arg expects one element per batch element
-    seq = fill_predicted_toks(seq, logits, sample_top_n, np.array([rng]))
+    seq = fill_predicted_tok(seq, logits, sample_top_n, np.array([rng]))
     return seq
 
 
@@ -320,7 +412,7 @@ def pred_msg(
         state: TrainState,
         model: flax.linen.Module,
         batchnorm: bool,
-        rng: PRNGKeyArray,
+        rng: jax.dtypes.prng_key,
         valid_mask_array: Optional[jax.Array] = None,
         sample_top_n: int = 5,
     ) -> np.ndarray:
@@ -406,8 +498,52 @@ def find_orig_msg(
     occ = find_all_msg_occurances(msg, seq, comp_cols)
     if len(occ) > 0:
         return int(occ.flatten()[0])
+    
 
-def find_all_msg_occurances(
+    
+@partial(jax.jit, static_argnums=(2,3))
+def find_n_msg_occurances(
+        msg: jax.Array,
+        seq: jax.Array,
+        comp_cols: Tuple[str],
+        n_matches: int = 1,
+    ) -> jax.Array:
+    ''' Returns the indices of the LAST (most recent) n matching messages in the sequence seq. '''
+    def get_ref_matches(msg, seq, comp_cols, n_matches):
+        comp_cols_ref = \
+            [c for c in comp_cols if (c + '_ref' in Message_Tokenizer.FIELDS)]
+        comp_i = [idx for c in comp_cols_ref for idx in list(range(*get_idx_from_field(c)))]
+        comp_i_ref = [idx for c in comp_cols_ref for idx in list(range(*get_idx_from_field(c + '_ref')))]
+        if 'direction' in comp_cols:
+            comp_cols_ref += ['direction']  # direction field should be added to ref search
+            comp_i += list(range(*get_idx_from_field('direction')))
+            comp_i_ref += list(range(*get_idx_from_field('direction')))
+        comp_i = sorted(comp_i)
+        comp_i_ref = sorted(comp_i_ref)
+        ref_matches = np.argwhere(
+            (seq[:, comp_i_ref] == msg[comp_i,]).all(axis=1),
+            size=n_matches,
+            fill_value=-1,
+        )
+        return ref_matches.flatten()
+
+    l = Message_Tokenizer.MSG_LEN
+    seq = seq.reshape((-1, Message_Tokenizer.MSG_LEN))
+    comp_i = [idx for c in comp_cols for idx in list(range(*get_idx_from_field(c)))]
+    direct_matches = np.argwhere(
+        (seq[:, comp_i] == msg[comp_i,]).all(axis=1),
+        size=n_matches,
+        fill_value=-1,
+    )
+    matches = jax.lax.cond(
+        direct_matches[0] == -1,
+        get_ref_matches,  # no direct match found
+        lambda *args: direct_matches,  # direct match found
+        msg, seq ,comp_cols, n_matches
+    )
+    return matches
+
+def find_all_msg_occurances_DEPR(
         msg: jax.Array,
         seq: jax.Array,
         comp_cols: Iterable[str],
@@ -493,6 +629,11 @@ def try_find_msg(
         seq_mask: filters to messages with correctly matching price level 
                   CAVE: values of 1 in mask are set to -1 in seq if no perfect match is found
     """
+    def get_match_idx():
+        matches = find_n_msg_occurances(msg, seq, comp_cols)
+        idx = int(matches.flatten()[0])
+        return idx
+
     if seq_mask is not None:
         seq = seq.at[seq_mask, :].set(-1)
 
@@ -501,14 +642,35 @@ def try_find_msg(
         ('event_type', 'direction', 'price', 'size', 'time_s', 'time_ns'),
         ('event_type', 'direction', 'price', 'size'),
     ]
-    n_removed = 0
-    for comp_cols in matching_cols:
-        # remove field from matching criteria
-        matches = find_all_msg_occurances(msg, seq, comp_cols)
-        if len(matches) > 0:
-            idx = int(matches.flatten()[0])
-            debug('found match after removing', n_removed, 'at idx', idx)
-            return idx, n_removed
-        n_removed += 1
-    debug('no match found')
-    return None, None
+
+    # TODO: compare while with scan performance
+    # idx = jax.lax.while_loop(
+    #     lambda cc_and_i : cc_and_i[1] == -1,
+    #     lambda cc_and_i: find_n_msg_occurances(seq, msg, cc[0])[0],  # returns new val passed to first arg fn. until cond is False
+    #     (matching_cols[0], 1),
+    # )
+
+    _, idcs = jax.lax.scan(
+        lambda _, comp_cols: find_n_msg_occurances(seq, msg, comp_cols),
+        0,  # init for carry (not needed)
+        matching_cols
+    )
+    idcs = idcs.flatten()
+    return jnp.where(
+        idcs != 1,
+        idcs,
+        size=1, fill_value=-1
+    )
+    # TODO: also return n_removed (i.e. arghwere, not only where...)
+
+    # n_removed = 0
+    # for comp_cols in matching_cols:
+    #     # remove field from matching criteria
+    #     matches = find_n_msg_occurances(msg, seq, comp_cols)
+    #     if len(matches) > 0:
+    #         idx = int(matches.flatten()[0])
+    #         debug('found match after removing', n_removed, 'at idx', idx)
+    #         return idx, n_removed
+    #     n_removed += 1
+    # debug('no match found')
+    # return None, None

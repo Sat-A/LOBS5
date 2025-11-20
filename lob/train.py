@@ -1,19 +1,30 @@
-from functools import partial
+import os
+import jax
 from jax import random
-import jax.numpy as np
-from jax.scipy.linalg import block_diag
-from flax.training import checkpoints
-import orbax.checkpoint
-from lob.lob_seq_model import BatchFullLobPredModel, BatchLobPredModel, BatchPaddedLobPredModel
+import jax.numpy as jnp
+import flax
+import orbax.checkpoint as ocp
+import psutil  # For memory profiling
+
+
+
+# WandB configuration (must be set before wandb import)
+os.environ["WANDB_MODE"] = "online"
+os.environ["WANDB_BASE_URL"] = "https://api.wandb.ai"
+os.environ["WANDB_INSECURE_DISABLE_SSL"] = "True"
 import wandb
 
-from lob.init_train import init_train_state, load_checkpoint
-from lob.dataloading import Datasets, create_lobster_prediction_dataset, create_lobster_train_loader
-from lob.lobster_dataloader import LOBSTER, LOBSTER_Dataset
-from lob.train_helpers import create_train_state, reduce_lr_on_plateau,\
-    linear_warmup, cosine_annealing, constant_lr, train_epoch, validate
-from s5.ssm import init_S5SSM
-from s5.ssm_init import make_DPLR_HiPPO
+
+import gc
+
+from lob.init_train import init_train_state, load_checkpoint, save_checkpoint, deduplicate_trainstate
+from lob.dataloading import create_lobster_prediction_dataset, create_lobster_train_loader#, Datasets
+from lob.lobster_dataloader import LOBSTER_Dataset
+from lob.train_helpers import reduce_lr_on_plateau, linear_warmup, \
+    cosine_annealing, constant_lr, train_epoch, validate
+from lob.memory_profiler import print_memory_usage, detailed_memory_breakdown
+
+
 
 
 def train(args):
@@ -24,7 +35,7 @@ def train(args):
     best_test_loss = 100000000
     best_test_acc = -10000.0
 
-    # for parameter sweep: get args from wandb server
+    #for parameter sweep: get args from wandb server
     if args is None:
         args = wandb.config
     else:
@@ -49,14 +60,38 @@ def train(args):
     key = random.PRNGKey(args.jax_seed)
     init_rng, train_rng = random.split(key, num=2)
 
+    # === DEBUG: Test memory_stats() directly in training script ===
+    print("\n[DEBUG] Testing memory_stats() in training context:")
+    test_devices = jax.local_devices()
+    print(f"[DEBUG] Found {len(test_devices)} devices")
+    for i, dev in enumerate(test_devices):
+        test_stats = dev.memory_stats()
+        print(f"[DEBUG] Device {i}: stats type={type(test_stats)}, is_none={test_stats is None}, bool={bool(test_stats)}")
+        if test_stats:
+            print(f"[DEBUG]   Has data! bytes_in_use={test_stats.get('bytes_in_use', 'N/A')}")
+        else:
+            print(f"[DEBUG]   Stats is None or empty!")
+    print("[DEBUG] End of memory_stats() test\n")
+
     # Get dataset creation function
     ds = 'lobster-prediction'
     #create_dataset_fn =  Datasets[ds]
 
     # Create dataset...
     init_rng, key = random.split(init_rng, num=2)
-    mask_fn = LOBSTER_Dataset.causal_mask if args.masking == 'causal' else LOBSTER_Dataset.random_mask
-    (lobster_dataset, trainloader, valloader, testloader, aux_dataloaders, 
+    mask_fn=None
+    if args.masking == 'causal':
+        mask_fn = LOBSTER_Dataset.causal_mask
+    elif args.masking == 'random':
+        mask_fn = LOBSTER_Dataset.random_mask
+    elif args.masking == 'last_pos':
+         mask_fn = LOBSTER_Dataset.last_pos_mask
+    elif args.masking == 'none':
+         mask_fn = LOBSTER_Dataset.no_mask
+    else:
+        ValueError('Issue with mask function: logic for '+args.masking+' not implemented.')
+
+    (lobster_dataset, trainloader, valloader, testloader, aux_dataloaders,
         n_classes, seq_len, in_dim, book_seq_len, book_dim, train_size) = \
         create_lobster_prediction_dataset(
             args.dir_name,
@@ -68,40 +103,107 @@ def train(args):
             use_simple_book=args.use_simple_book,
             book_transform=args.book_transform,
             n_data_workers=args.n_data_workers,
+            shuffle_train=args.shuffle_train,
+            rand_offset=args.random_offsets_train,
+            debug_overfit=args.debug_overfit,
+            test_dir=args.test_dir_name if hasattr(args, 'test_dir_name') else None,
+            data_mode=args.data_mode if hasattr(args, 'data_mode') else 'preproc',
         )
+
+    
 
     print(f"[*] Starting S5 Training on {ds} =>> Initializing...")
-
-    state, model_cls = init_train_state(
-        args,
-        n_classes=n_classes,
-        seq_len=seq_len,
-        book_dim=book_dim,
-        book_seq_len=book_seq_len,
-        print_shapes=True
-    )
-
-    if args.restore is not None and args.restore != '':
-        print(f"[*] Restoring weights from {args.restore}")
-        ckpt = load_checkpoint(
-            state,
-            args.restore,
-            args.__dict__,
-            step=args.restore_step,
+    if args.debug_loading:
+        state=None
+        val_model=None
+        init_hidden=None
+    else:
+        state, model_cls = init_train_state(
+            args,
+            n_classes=n_classes,
+            seq_len=seq_len,
+            book_dim=book_dim,
+            book_seq_len=book_seq_len,
+            print_shapes=True
         )
-        state = ckpt['model']
+
+        if args.restore is not None and args.restore != '':
+            print(f"[*] Restoring weights from {args.restore}")
+            ckpt = load_checkpoint(
+                state,
+                args.restore,
+                # args.__dict__,
+                step=args.restore_step,
+            )
+            state = ckpt['model']
+        
+        val_model = model_cls(training=False, step_rescale=1)
+        init_hidden=model_cls().initialize_carry(batch_size=args.bsz//args.num_devices,
+                                                hidden_size=(ssm_size // pow(2,int(args.conj_sym))),
+                                                n_message_layers=args.n_message_layers,
+                                                n_book_pre_layers=args.n_book_pre_layers ,
+                                                n_book_post_layers=args.n_book_post_layers,
+                                                n_fused_layers=args.n_layers,
+                                                h_size_ema=ssm_size)
+    
+    # === Detailed Memory Breakdown ===
+    print("\n" + "="*60)
+    print("Analyzing Memory Composition...")
+    print("="*60)
+    batch_per_gpu = args.bsz // args.num_devices
+    detailed_memory_breakdown(
+        state=state,
+        batch_size_per_gpu=batch_per_gpu,
+        seq_len=seq_len,
+        vocab_size=n_classes,  # d_output
+        d_model=args.d_model,
+        n_layers=args.n_layers
+    )
 
     # Training Loop over epochs
     best_loss, best_acc, best_epoch = 100000000, -100000000.0, 0  # This best loss is val_loss
     count, best_val_loss = 0, 100000000  # This line is for early stopping purposes
     lr_count, opt_acc = 0, -100000000.0  # This line is for learning rate decay
     step = 0  # for per step learning rate decay
-    steps_per_epoch = int(train_size/args.bsz)
+    steps_per_epoch = int(train_size/args.bsz) if args.curtail_epochs is None else args.curtail_epochs+1
 
-    val_model = model_cls(training=False, step_rescale=1)
+    # print("USING VERY INFREQUENT CHECKPOINTING FOR TINY EPOCH SIZE ")
+
+    mgr_options = ocp.CheckpointManagerOptions(
+        save_interval_steps=1,
+        create=True,
+        max_to_keep=10,
+        keep_period=5,
+        # step_prefix=f'{run.name}_{run.id}',
+        # enable_async_checkpointing=False,
+    )
+    ckpt_mgr = ocp.CheckpointManager(
+        os.path.abspath(f'checkpoints/{run.name}_{run.id}/'),
+        # ocp.Checkpointer(ocp.PyTreeCheckpointHandler()),
+        # ocp.Checkpointer(ocp.StandardCheckpointHandler()),
+        item_names=('state', 'metadata'),
+        options=mgr_options,
+        metadata=vars(args)
+    )
+
+
+    if args.ignore_times:
+        # Removing the 5 abs time tokens from the length of the sequence.  
+        dt = [[x] for (x,) in zip([*range(seq_len-5*args.msg_seq_len)])]
+    else:
+        dt = [[x] for (x,) in zip([*range(seq_len)])]
+    ce_table=wandb.Table(columns=["tok"] ,data=dt)
+
+    ignore_times=args.ignore_times
+    batchnorm=args.batchnorm
+
+    # Log initial memory state
+    print_memory_usage("Initial")
 
     for epoch in range(args.epochs):
         print(f"[*] Starting Training Epoch {epoch + 1}...")
+        print_memory_usage(f"Start of Epoch {epoch + 1}")
+        # jax.profiler.start_trace("./jax-traces")
 
         if epoch < args.warmup_end:
             print("using linear warmup for epoch {}".format(epoch+1))
@@ -124,50 +226,80 @@ def train(args):
 
         print('Training on', args.num_devices, 'devices.')
         train_rng, skey = random.split(train_rng)
-        state, train_loss, step = train_epoch(state,
+
+        #Pass an initial hidden state to be used in case of the 'RNN' forward pass being used. 
+        state, train_loss,ce_by_tok ,step = train_epoch(state,
                                               skey,
                                               #model_cls,
                                               #train_model,
                                               trainloader,
                                               seq_len,
-                                              in_dim,
-                                              args.batchnorm,
+                                              #in_dim,
+                                              batchnorm,
                                               lr_params,
-                                              args.num_devices)
-        # reinit training loader, so that sequences are initialised with
-        del trainloader
-        # different offsets
-        trainloader = create_lobster_train_loader(
-            lobster_dataset,
-            int(random.randint(skey, (1,), 0, 100000)),
-            args.bsz,
-            num_workers=args.n_data_workers,
-            reset_train_offsets=True)
+                                              args.num_devices,
+                                              args.debug_loading,
+                                              args.enable_profiler,
+                                              args.curtail_epochs,
+                                              init_hidden,
+                                              epoch,
+                                              ignore_times,
+                                              args.log_ce_tables)
+
+        print_memory_usage(f"After training epoch {epoch + 1}")
+
+        if args.random_offsets_train:
+            # reinit training loader, so that sequences are initialised with
+            del trainloader
+            # # different offsets
+            trainloader = create_lobster_train_loader(
+                lobster_dataset,
+                int(random.randint(skey, (1,), 0, 100000)[0]),
+                args.bsz,
+                num_workers=args.n_data_workers,
+                reset_train_offsets=args.random_offsets_train,
+                shuffle=args.shuffle_train)
+        print(f"val model hash: {val_model.__hash__()}")
+        print(f"val model apply hash: {val_model.__hash__()}")
 
         if valloader is not None:
-            print(f"[*] Running Epoch {epoch + 1} Validation...")
-            val_loss, val_acc = validate(state,
-                                         #model_cls,
-                                         val_model.apply,
-                                         valloader,
-                                         seq_len,
-                                         in_dim,
-                                         args.batchnorm,
-                                         args.num_devices)
+            print(f"[*] Running Epoch {epoch + 1} Validation ") #on train set (With call)...
+            (val_loss,
+              val_acc,
+                val_ce_means,
+                val_acc_means) = validate(state,
+                                        #model_cls,
+                                        val_model.apply,
+                                        valloader,
+                                        seq_len,
+                                        in_dim,
+                                        batchnorm,
+                                        args.num_devices,
+                                        epoch,
+                                        curtail_epoch=args.curtail_epochs,
+                                        apply_method='__call_ar__',
+                                        ignore_times=ignore_times,
+                                        log_ce_tables=args.log_ce_tables)
 
-            print(f"[*] Running Epoch {epoch + 1} Test...")
-            test_loss, test_acc = validate(state,
+            print(f"[*] Running Epoch {epoch + 1} Test ") #on train set (With Call RNN)...
+            (test_loss, test_acc,
+              test_ce_means,test_acc_means) = validate(state,
                                            #model_cls,
                                            val_model.apply,
                                            testloader,
                                            seq_len,
                                            in_dim,
-                                           args.batchnorm,
-                                           args.num_devices)
+                                           batchnorm,
+                                           args.num_devices,
+                                           epoch,
+                                           curtail_epoch=args.curtail_epochs,
+                                           apply_method='__call_ar__',
+                                           ignore_times=ignore_times,
+                                           log_ce_tables=args.log_ce_tables)
 
             print(f"\n=>> Epoch {epoch + 1} Metrics ===")
             print(
-                f"\tTrain Loss: {train_loss:.5f} -- Val Loss: {val_loss:.5f} --Test Loss: {test_loss:.5f} --"
+                f"\tTrain Loss: {train_loss:.5f} -- Val Loss (AR): {val_loss:.5f} --Test Loss (RNN): {test_loss:.5f} --"
                 f" Val Accuracy: {val_acc:.4f}"
                 f" Test Accuracy: {test_acc:.4f}"
             )
@@ -175,12 +307,22 @@ def train(args):
         else:
             # else use test set as validation set (e.g. IMDB)
             print(f"[*] Running Epoch {epoch + 1} Test...")
-            val_loss, val_acc = validate(state,
-                                         model_cls,
-                                         testloader,
+            # print("Testing on train data (diff offset) for debugging purposes")
+            (test_loss, test_acc,
+              test_ce_means,test_acc_means) = validate(state,
+                                         #model_cls,
+                                         val_model.apply,
+                                         valloader,
                                          seq_len,
                                          in_dim,
-                                         args.batchnorm)
+                                         batchnorm,
+                                         args.num_devices,
+                                         epoch,
+                                         curtail_epoch=args.curtail_epochs,
+                                         ignore_times=ignore_times,
+                                         log_ce_tables=args.log_ce_tables)
+            val_loss=test_loss
+            val_acc=test_acc
 
             print(f"\n=>> Epoch {epoch + 1} Metrics ===")
             print(
@@ -188,28 +330,19 @@ def train(args):
                 f" Test Accuracy: {val_acc:.4f}"
             )
 
-        # save checkpoint
+        #save checkpoint
         ckpt = {
-            'model': state,
+            'model': deduplicate_trainstate(state),
             'config': vars(args),
             'metrics': {
-                'loss_train': train_loss,
-                'loss_val': val_loss,
-                'loss_test': test_loss,
-                'acc_val': val_acc,
-                'acc_test': test_acc,
+                'loss_train': float(train_loss),
+                'loss_val_ar': float(val_loss),
+                'loss_test_rnn': float(test_loss),
+                'acc_val_ar': float(val_acc),
+                'acc_test_rnn': float(test_acc),
             }
         }
-        orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
-        checkpoints.save_checkpoint(
-            ckpt_dir=f'checkpoints/{run.name}_{run.id}',
-            target=ckpt,
-            step=epoch,
-            overwrite=True,
-            keep=2,
-            keep_every_n_steps=10,
-            orbax_checkpointer=orbax_checkpointer
-        )
+        save_checkpoint(ckpt_mgr, ckpt, epoch)
 
         # For early stopping purposes
         if val_loss < best_val_loss:
@@ -217,6 +350,8 @@ def train(args):
             best_val_loss = val_loss
         else:
             count += 1
+
+
 
         if val_acc > best_acc:
             # Increment counters etc.
@@ -239,6 +374,15 @@ def train(args):
             f" {best_test_acc:.4f} at Epoch {best_epoch + 1}\n"
         )
 
+        if args.log_ce_tables:
+            ce_table.add_column(name="val_ce_"+str(epoch),data=val_ce_means.tolist())
+            ce_table.add_column(name="test_ce_"+str(epoch),data=test_ce_means.tolist())
+            ce_table.add_column(name="val_acc_"+str(epoch),data=val_acc_means.tolist())
+            ce_table.add_column(name="test_acc_"+str(epoch),data=test_acc_means.tolist())
+            ce_table.add_column(name="train_ce_"+str(epoch),data=ce_by_tok.tolist())
+            ce_table=wandb.Table(columns=ce_table.columns,data=ce_table.data)
+        
+
         if valloader is not None:
             wandb.log(
                 {
@@ -250,8 +394,9 @@ def train(args):
                     "count": count,
                     "Learning rate count": lr_count,
                     "Opt acc": opt_acc,
-                    "lr": state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'],
-                    "ssm_lr": state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate']
+                    "lr": float(state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'][0]),
+                    "ssm_lr": float(state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate'][0]),
+                    # "Training CE by token":ce_table
                 }
             )
         else:
@@ -263,15 +408,24 @@ def train(args):
                     "count": count,
                     "Learning rate count": lr_count,
                     "Opt acc": opt_acc,
-                    "lr": state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'],
-                    "ssm_lr": state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate']
+                    "lr": float(state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'][0]),
+                    "ssm_lr": float(state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate'][0]),
+                    # "Training CE by token":ce_table
                 }
             )
+
+        if args.log_ce_tables:
+            wandb.log({"CE by token": ce_table})
         wandb.run.summary["Best Val Loss"] = best_loss
         wandb.run.summary["Best Val Accuracy"] = best_acc
         wandb.run.summary["Best Epoch"] = best_epoch
         wandb.run.summary["Best Test Loss"] = best_test_loss
         wandb.run.summary["Best Test Accuracy"] = best_test_acc
-
+        # print("IGNORING EARLY STOPPING FOR TINY EPOCH SIZE ")
+        # After each epoch
+        gc.collect()
+        # jax.clear_backends()
+        jax.clear_caches()
+        # jax.profiler.stop_trace()
         if count > args.early_stop_patience:
             break

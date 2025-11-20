@@ -31,12 +31,20 @@ class StackedEncoderModel(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
+    use_embed_layer: bool = False
+    vocab_size: int = -1  # only used if use_encode_layer is True
 
     def setup(self):
         """
         Initializes a linear encoder and the stack of S5 layers.
         """
-        self.encoder = nn.Dense(self.d_model)
+        if self.use_embed_layer:
+            self.encoder = nn.Embed(self.vocab_size, self.d_model)
+        else:
+            self.encoder = nn.Dense(self.d_model)
+
+        #NOTE:  popjaxrl S5 doesn't have an encoding layer, tbd if this makes a differnce. 
+
         self.layers = [
             SequenceLayer(
                 ssm=self.ssm,
@@ -61,11 +69,52 @@ class StackedEncoderModel(nn.Module):
         Returns:
             output sequence (float32): (L, d_model)
         """
+        #jax.debug.print("Before encoder in StackedEncoderModel {}",x.shape)
+        #jax.debug.print("call x_m[0:5] before msg_enc.encoder : {}",x[0:5][0])
         x = self.encoder(x)
-        for layer in self.layers:
-            x = layer(x)
-        return x
+        #jax.debug.print("call x_m[0:5] after msg_enc.encoder : {}",x[0:5][0])
 
+        #jax.debug.print("After encoder in StackedEncoderModel {}",x.shape)
+        for i,layer in enumerate(self.layers):
+            x = layer(x)
+            #jax.debug.print("call x_m[0:2] after layer {} : {}",i,x[0:2][0][0:2])
+
+        #jax.debug.print("call x_m[0:5] after msg_enc.layers : {}",x[0:5][0])
+
+        return x
+    
+
+    def __call_rnn__(self, hidden, x,d, integration_timesteps):
+        """
+        Compute the LxH output of the stacked encoder given an Lxd_input
+        input sequence.
+        Args:
+             hidden : hidden state (nLayers, P)
+                list of hidden states of len(nLayers)
+             x (float32): input sequence (L, d_model)
+             d (bool): reset signal (L,)
+             integration_timesteps (): variable int timesteps, unused... 
+        Returns:
+            output sequence (float32): (L, d_model)
+        """
+        #jax.debug.print("Before encoder in StackedEncoderModel.callrnn {}",x.shape)
+        #jax.debug.print("call_rnn x_m[0:5] before msg_enc.encoder : {}",x[0:5][0])
+        x = self.encoder(x)
+        #jax.debug.print("call_rnn x_m[0:5] after msg_enc.encoder : {}",x[0:5][0])
+
+        #jax.debug.print("After encoder in StackedEncoderModel.callrnn {}",x.shape)
+        new_hiddens = []
+        for i, layer in enumerate(self.layers):
+            new_h, x = layer.__call_rnn__(hidden[i],x,d)
+            new_hiddens.append(new_h)
+            #jax.debug.print("call_rnn x[0:2] after layer {} : {}",i,x[0:2][0][0:2])
+        #jax.debug.print("call_rnn x_m[0:2] after msg_enc.layers : {}",x[0:5][0])
+        return new_hiddens,x
+
+    @staticmethod
+    def initialize_carry(batch_size, hidden_size, n_layers):
+        # Use a dummy key since the default state init fn is just zeros.
+        return [SequenceLayer.initialize_carry(batch_size,hidden_size) for _ in range(n_layers)]
 
 def masked_meanpool(x, lengths):
     """
