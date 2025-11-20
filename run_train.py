@@ -68,6 +68,12 @@ if __name__ == "__main__":
 	#physical_devices = tf.config.list_physical_devices('GPU')
 	#tf.config.experimental.set_memory_growth(physical_devices[0], True)
 	#tf.config.experimental.set_visible_devices([], "GPU")
+ 
+  
+    os.environ["NCCL_TIMEOUT"] = "600"  # 10 minutes
+    os.environ["NCCL_IB_DISABLE"] = "0"  # Disable InfiniBand if not used
+    os.environ["NCCL_P2P_DISABLE"] = "0"  # Disable peer-to-peer if causing issues
+
 
 	parser = argparse.ArgumentParser()
 
