@@ -9,7 +9,7 @@ from flax import jax_utils
 import optax
 from typing import Any, Dict, Optional, Tuple, Union
 from lob.encoding import Message_Tokenizer
-from lob.memory_profiler import print_memory_usage
+# from lob.memory_profiler import print_memory_usage
 import sys
 
 
@@ -466,9 +466,19 @@ def device_reshape(
     return inputs, targets, book_data, timestep_msg, timestep_book
 
 
-def print_memory_usage():
+def print_memory_usage(step_name=""):
     """Print GPU and system memory usage"""
     process = psutil.Process(os.getpid())
+    
+    
+    print(f"\n{'='*60}")
+    if step_name:
+        print(f"Memory Usage @ {step_name}")
+    else:
+        print(f"Memory Usage")
+    print(f"{'='*60}")
+    
+    
     print(f"CPU Memory: {process.memory_info().rss / 1024 ** 3:.2f} GB")
     
     # JAX device memory

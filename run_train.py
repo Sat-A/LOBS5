@@ -56,13 +56,12 @@ if __name__ == "__main__":
 	# allocate and de-allocate memory as needed (SLOW)
 	# NOTE: platform allocator does NOT support memory_stats() API!
 	# Commenting out to enable GPU memory profiling
-	os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+	# os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 	# ······· choice 2 ······· END
  
  
 	# ······· choice 3 ······· STR
-	# import os
-	# os.environ["JAX_DISABLE_JIT"] = "1"  # 完全关闭JIT编译
+	os.environ["JAX_DISABLE_JIT"] = "1"  # 完全关闭JIT编译
 	# ······· choice 3 ······· END
 
 	#physical_devices = tf.config.list_physical_devices('GPU')
@@ -70,9 +69,10 @@ if __name__ == "__main__":
 	#tf.config.experimental.set_visible_devices([], "GPU")
  
   
-    os.environ["NCCL_TIMEOUT"] = "600"  # 10 minutes
-    os.environ["NCCL_IB_DISABLE"] = "0"  # Disable InfiniBand if not used
-    os.environ["NCCL_P2P_DISABLE"] = "0"  # Disable peer-to-peer if causing issues
+	os.environ["NCCL_TIMEOUT"] = "600"  # 10 minutes
+	os.environ["NCCL_IB_DISABLE"] = "0"  # Disable InfiniBand if not used
+	os.environ["NCCL_P2P_DISABLE"] = "0"  # Disable peer-to-peer if causing issues
+
 
 
 	parser = argparse.ArgumentParser()
