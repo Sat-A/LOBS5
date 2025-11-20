@@ -12,6 +12,10 @@ from lob.encoding import Message_Tokenizer
 from lob.memory_profiler import print_memory_usage
 import sys
 
+
+import psutil
+import os
+
 # from lob.lob_seq_model import LobPredModel
 
 
@@ -462,6 +466,38 @@ def device_reshape(
     return inputs, targets, book_data, timestep_msg, timestep_book
 
 
+def print_memory_usage():
+    """Print GPU and system memory usage"""
+    process = psutil.Process(os.getpid())
+    print(f"CPU Memory: {process.memory_info().rss / 1024 ** 3:.2f} GB")
+    
+    # JAX device memory
+    for device in jax.local_devices()[:1]:
+        try:
+            stats = device.memory_stats()
+            if stats:
+                print(f"Device {device} Used: {stats['bytes_in_use'] / 1024**2:.2f} MB / {stats['bytes_limit'] / 1024**3:.2f} GB")
+        except:
+            pass
+
+def print_memory_usage_tofile():
+    """Print GPU and system memory usage to a file"""
+    process = psutil.Process(os.getpid())
+    with open('/tmp/memory_usage.txt', 'a') as f:
+        f.write(f"CPU Memory: {process.memory_info().rss / 1024 ** 3:.2f} GB\n")
+        
+        # JAX device memory
+        for device in jax.local_devices()[:1]:
+            try:
+                stats = device.memory_stats()
+                if stats:
+                    f.write(f"Device {device} Used: {stats['bytes_in_use'] / 1024**2:.2f} MB / {stats['bytes_limit'] / 1024**3:.2f} GB\n")
+            except:
+                pass
+
+
+
+
 def train_epoch(
         state,
         rng,
@@ -502,6 +538,10 @@ def train_epoch(
             # print("train_epoch: Inputs 0:5:", inputs[0][0,0:5,:])
             rng, drop_rng = jax.random.split(rng)
 
+            # Print memory every 1000 steps
+            if batch_idx % 10 == 0:
+                print(f"\n=== Epoch {epoch}, Batch {batch_idx} ===")
+                print_memory_usage()
             
             # state,loss=train_step_rnn(                
             #     state,
