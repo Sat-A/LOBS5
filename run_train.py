@@ -56,8 +56,14 @@ if __name__ == "__main__":
 	# allocate and de-allocate memory as needed (SLOW)
 	# NOTE: platform allocator does NOT support memory_stats() API!
 	# Commenting out to enable GPU memory profiling
-	# os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+	os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 	# ······· choice 2 ······· END
+ 
+ 
+	# ······· choice 3 ······· STR
+	# import os
+	# os.environ["JAX_DISABLE_JIT"] = "1"  # 完全关闭JIT编译
+	# ······· choice 3 ······· END
 
 	#physical_devices = tf.config.list_physical_devices('GPU')
 	#tf.config.experimental.set_memory_growth(physical_devices[0], True)
