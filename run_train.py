@@ -45,7 +45,7 @@ if __name__ == "__main__":
 	import time
 	time.sleep(1)
 	# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]="0.9"
-	# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true"
+	# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true"export XLA_PYTHON_CLIENT_PREALLOCATE=false
 	time.sleep(1)
 	# ······· choice 1 ······· END
  
@@ -71,12 +71,12 @@ if __name__ == "__main__":
 	os.environ["NCCL_P2P_DISABLE"] = "0"  # Disable peer-to-peer if causing issues
  
  
-	os.environ["XLA_FLAGS"] = "--xla_gpu_enable_while_loop_unrolling=false"
+	# os.environ["XLA_FLAGS"] = "--xla_gpu_enable_while_loop_unrolling=false"
 
 
 	import argparse
 	from s5.utils.util import str2bool
-	# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
+	os.environ["CUDA_VISIBLE_DEVICES"] = "1,2"
 
 
 	parser = argparse.ArgumentParser()

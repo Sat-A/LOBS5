@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+Miniconda3*
 
 # C extensions
 *.so
