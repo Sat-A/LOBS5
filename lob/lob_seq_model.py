@@ -529,23 +529,28 @@ class PaddedLobPredModel(nn.Module):
         (L_m x d_input, L_b x [P+1]) input sequence tuple,
         combining message and book inputs.
         Args:
-             x_m: message input sequence (L_m x d_input, 
-             x_b: book state (volume series) (L_b x [P+1])
+             x_m: message input sequence (L_m) - int32 tokens
+             x_b: book state (volume series) (L_b x [P+1]) - float32
         Returns:
-            output (float32): (d_output)
+            output (float32): (L, d_output) - log probabilities in FP32
         """
-        #Uncomment to debug if no longer working in data-loader. 
+        #Uncomment to debug if no longer working in data-loader.
 
+        # Message encoder: int32 tokens → BF16 activations
         x_m = self.message_encoder(x_m, message_integration_timesteps)
+
+        # BF16 Mixed Precision: Cast book data to BF16
+        x_b = x_b.astype(jnp.bfloat16)
         x_b = self.book_encoder(x_b, book_integration_timesteps)
 
-        #Works because book already repeated when loading data. 
+        #Works because book already repeated when loading data.
+        # Concatenate in BF16
         x = jnp.concatenate([x_m, x_b], axis=1)
         # TODO: again, check integration time steps make sense here
         x = self.fused_s5(x, jnp.ones(x.shape[0]))
 
         #Removed the pooling to enable each token to be a target,
-        #  not just a random one in the last message. 
+        #  not just a random one in the last message.
 
         # jax.debug.print("x output shape {}, 1st five: \n {}",x.shape,x[:5,:5])
 
@@ -556,18 +561,27 @@ class PaddedLobPredModel(nn.Module):
         elif self.mode in ["none"]:
             pass
         elif self.mode in ['ema']:
-            x,_=ewma_vectorized_safe(x,2 /(22 + 1.0),jnp.zeros((1,x.shape[1])),jnp.array(1))
+            # BF16 Mixed Precision: EMA needs FP32 for cumulative operations
+            x_fp32 = x.astype(jnp.float32)
+            x_fp32, _ = ewma_vectorized_safe(
+                x_fp32, 2 /(22 + 1.0),
+                jnp.zeros((1, x_fp32.shape[1])),
+                jnp.array(1)
+            )
+            x = x_fp32.astype(jnp.bfloat16)
             #FIXME: Provide the ntoks argument for averaging as an arg.
         else:
             raise NotImplementedError("Mode must be in ['pool', 'last','none','ema']")
-        
+
         # jax.debug.print("x output shape after pool/last/ema/none shape {}, 1st five: \n {}",x.shape,x[:5,:5])
         x = self.decoder(x)
         # jax.debug.print("x output shape after decoder {}, 1st five: \n {}",x.shape,x[:5,:5])
 
-        
-        x=nn.log_softmax(x, axis=-1)
-        return x
+        # BF16 Mixed Precision: Cast to FP32 for softmax (numerical stability)
+        x = x.astype(jnp.float32)
+        x = nn.log_softmax(x, axis=-1)
+
+        return x  # Returns FP32
     
     @staticmethod
     def initialize_carry(batch_size, hidden_size,

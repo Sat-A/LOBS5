@@ -603,9 +603,15 @@ def train_step(
 
     def loss_fn(params):
         # print('checking for compile in loss_fn')
+        # BF16 Mixed Precision: Cast params to BF16 for forward pass
+        params_bf16 = jax.tree_util.tree_map(
+            lambda x: x.astype(np.bfloat16) if x.dtype == np.float32 else x,
+            params
+        )
+
         if batchnorm:
-            logits, mod_vars = state.apply_fn( 
-                {"params": params, "batch_stats": state.batch_stats},
+            logits, mod_vars = state.apply_fn(
+                {"params": params_bf16, "batch_stats": state.batch_stats},
                 *batch_inputs, *batch_integration_timesteps,
                 rngs={"dropout": rng},
                 mutable=["intermediates", "batch_stats"],
@@ -613,19 +619,22 @@ def train_step(
             )
         else:
             logits, mod_vars = state.apply_fn(
-                {"params": params},
+                {"params": params_bf16},
                 *batch_inputs, *batch_integration_timesteps,
                 rngs={"dropout": rng},
                 mutable=["intermediates"],
                 method='__call_ar__'
             )
 
+        # BF16 Mixed Precision: Cast logits back to FP32 for loss computation
+        logits = logits.astype(np.float32)
 
         # jax.debug.print("Shape of Logits: {}",logits.shape)
         # jax.debug.print("Shape of Labels: {}", batch_labels.shape)
 
-        
-        ce=cross_entropy_loss(logits, batch_labels)
+        # Ensure labels are int32
+        batch_labels_int = batch_labels.astype(np.int32)
+        ce=cross_entropy_loss(logits, batch_labels_int)
         if ignore_times:
             ce=ce.reshape(ce.shape[0],-1,Message_Tokenizer.MSG_LEN)
             ce_1=ce[:,:,:TIME_START_I]
@@ -883,20 +892,28 @@ def eval_step(
     ):
     # print("checking for compile in eval_step function")
 
-
     batch_inputs=repeat_book(*batch_inputs,True)
+
+    # BF16 Mixed Precision: Cast params to BF16 for evaluation
+    params_bf16 = jax.tree_util.tree_map(
+        lambda x: x.astype(np.bfloat16) if x.dtype == np.float32 else x,
+        state.params
+    )
 
     if apply_method == '__call_ar__':
         if batchnorm:
-            logits = apply_fn({"params": state.params, "batch_stats": state.batch_stats},
+            logits = apply_fn({"params": params_bf16, "batch_stats": state.batch_stats},
                                 *batch_inputs, *batch_integration_timesteps,
                                 method=apply_method,
                                 )
         else:
-            logits = apply_fn({"params": state.params},
+            logits = apply_fn({"params": params_bf16},
                                 *batch_inputs, *batch_integration_timesteps,
                                 method=apply_method,
                                 )
+
+        # BF16 Mixed Precision: Cast logits to FP32 for evaluation
+        logits = logits.astype(np.float32)
     elif apply_method == '__call_rnn__':
         dones=(np.zeros_like(batch_inputs[0],dtype=bool),)*3
 

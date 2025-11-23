@@ -308,19 +308,26 @@ class S5SSM(nn.Module):
         Compute the LxH output of the S5 SSM given an LxH input sequence
         using a parallel scan.
         Args:
-             input_sequence (float32): input sequence (L, H)
+             input_sequence (float32/bfloat16): input sequence (L, H)
         Returns:
-            output sequence (float32): (L, H)
+            output sequence (float32/bfloat16): (L, H)
         """
+        # BF16 Mixed Precision: Save input dtype and cast to FP32 for SSM operations
+        input_dtype = input_sequence.dtype
+        input_fp32 = input_sequence.astype(np.float32)
+
         ys,Bu_elements_call,Lambda_elements_call,xs_call= apply_ssm(self.Lambda_bar,
                        self.B_bar,
                        self.C_tilde,
-                       input_sequence,
+                       input_fp32,
                        self.conj_sym,
                        self.bidirectional)
 
-        Du = jax.vmap(lambda u: self.D * u)(input_sequence)
-        return ys + Du
+        Du = jax.vmap(lambda u: self.D * u)(input_fp32)
+        output = ys + Du
+
+        # BF16 Mixed Precision: Cast output back to input dtype
+        return output.astype(input_dtype)
     
     def __call_rnn__(self, hidden, input_sequence, resets):
         """

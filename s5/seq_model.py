@@ -65,13 +65,19 @@ class StackedEncoderModel(nn.Module):
         Compute the LxH output of the stacked encoder given an Lxd_input
         input sequence.
         Args:
-             x (float32): input sequence (L, d_input)
+             x (int32/float32): input sequence (L, d_input) - tokens or floats
         Returns:
-            output sequence (float32): (L, d_model)
+            output sequence (bfloat16): (L, d_model)
         """
         #jax.debug.print("Before encoder in StackedEncoderModel {}",x.shape)
         #jax.debug.print("call x_m[0:5] before msg_enc.encoder : {}",x[0:5][0])
+
+        # Embedding/Dense outputs FP32 by default
         x = self.encoder(x)
+
+        # BF16 Mixed Precision: Cast to BF16 for subsequent layers
+        x = x.astype(jax.numpy.bfloat16)
+
         #jax.debug.print("call x_m[0:5] after msg_enc.encoder : {}",x[0:5][0])
 
         #jax.debug.print("After encoder in StackedEncoderModel {}",x.shape)
@@ -81,7 +87,7 @@ class StackedEncoderModel(nn.Module):
 
         #jax.debug.print("call x_m[0:5] after msg_enc.layers : {}",x[0:5][0])
 
-        return x
+        return x  # Returns BF16
     
 
     def __call_rnn__(self, hidden, x,d, integration_timesteps):
