@@ -21,9 +21,9 @@ echo "[*] JAX compilation cache: $JAX_COMPILATION_CACHE_DIR"
 export JAX_DISABLE_JIT_COMPILE_C_EXTENSIONS=1
 echo "[*] JAX C extension compilation: disabled (faster startup)"
 
-# Platform (include cpu for debug callbacks)
-export JAX_PLATFORMS="cuda,cpu"
-echo "[*] JAX platforms: $JAX_PLATFORMS (cuda primary, cpu for debug)"
+# Platform
+export JAX_PLATFORMS="cuda"
+echo "[*] JAX platform: $JAX_PLATFORMS"
 
 # Precision
 export JAX_ENABLE_X64=false

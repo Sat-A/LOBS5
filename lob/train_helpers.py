@@ -166,8 +166,9 @@ def create_train_state(model_cls,
 
     model = model_cls(training=True)
     init_rng, dropout_rng = jax.random.split(rng, num=2)
-    
-    jax.debug.print("Dummy input shapes (msg,book) ({}, \n {})",dummy_input[0].shape,dummy_input[1].shape)
+
+    # jax.debug.print("Dummy input shapes (msg,book) ({}, \n {})",dummy_input[0].shape,dummy_input[1].shape)
+    print(f"[DEBUG] Dummy input shapes (msg,book): {dummy_input[0].shape}, {dummy_input[1].shape}")
     #RNN mode and initialisation needs to go in here if we need it. 
 
     variables = model.init({"params": init_rng,

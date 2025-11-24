@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:4
 #SBATCH --mem=0
-#SBATCH --time=00:09:59
+#SBATCH --time=00:19:59
 
 # ============================================
 # LOBS5 Training Script (Single/Multi-Node)

@@ -142,7 +142,7 @@ def encode_msg(
     return jnp.hstack(out)
 
 
-encode_msgs = jax.jit(jax.vmap(encode_msg, in_axes=(0, None)),backend='cpu')
+encode_msgs = jax.jit(jax.vmap(encode_msg, in_axes=(0, None)))  # Let JAX auto-select backend (GPU)
 
 @jax.jit
 def encode_time(
