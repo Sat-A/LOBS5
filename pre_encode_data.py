@@ -23,7 +23,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from tqdm import tqdm
-from multiprocessing import Pool
+import multiprocessing
 from functools import partial
 
 # Add parent directory to path to import lob modules
@@ -257,7 +257,9 @@ def pre_encode_directory(
     print(f"\nProcessing with {num_workers} workers...")
 
     if num_workers > 1:
-        with Pool(num_workers) as pool:
+        # Use 'spawn' to avoid JAX multithreading + fork() deadlock
+        ctx = multiprocessing.get_context('spawn')
+        with ctx.Pool(num_workers) as pool:
             results = list(tqdm(
                 pool.imap(process_single_file, args_list),
                 total=len(args_list),
