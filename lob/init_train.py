@@ -303,7 +303,7 @@ def init_train_state(
         in_dim=1, # in_dim,
         book_dim=book_dim,
         book_seq_len=book_seq_len,
-        bsz=args.bsz,
+        bsz=args.effective_bsz,
         seq_len=seq_len,
         weight_decay=args.weight_decay,
         batchnorm=args.batchnorm,

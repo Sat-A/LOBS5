@@ -1,37 +1,85 @@
-# python3 run_train.py \
-#         --C_init=trunc_standard_normal --prenorm=True --batchnorm=False --bidirectional=False \
-#         --blocks=16 --bsz=40 --d_model=1024 --dataset=lobster-prediction --merging=padded \
-#         --dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/GOOG2016TO2021_encoded' \
-#         --test_dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/GOOGJAN2023_encoded' \
-#         --data_mode='encoded' \
-#          --clip_eigs=True --activation_fn=half_glu1 \
-#         --dt_global=False --epochs=5 --jax_seed=42 --lr_factor=1 --n_layers=12 \
-#         --opt_config=standard --p_dropout=0.0 --ssm_lr_base=0.0003 --ssm_size_base=1024 \
-#         --warmup_end=1 --weight_decay=0.05 --msg_seq_len=500 \
-#         --use_book_data=True --use_simple_book=False --book_transform=True  \
-#         --masking=none \
-#         --num_devices=4 --n_data_workers=4 \
-#         --debug_loading=False \
-#         --enable_profiler=False \
-#         --random_offsets_train=True \
-#         --shuffle_train=True \
-#         --debug_overfit=False \
-#         --lr_patience=5 \
-#         --USE_WANDB=True \
-#         --wandb_project=lobs5-full-autoreg \
-#         --wandb_entity=kang-oxford 
-#         # --wandb_entity=kang-oxford 2>&1 | grep -v "sol_gpu_cost_model"
-#         # --restore='/lus/lfs1aip2/home/s5e/kangli.s5e/AlphaTrade/LOBS5/checkpoints/ruby-aardvark-62_98nov1i7' \
-#         # --restore_step=37
-#         #--restore='checkpoints/eager-shadow-750_af39bb9u/'
-#         #5135
-#         # --curtail_epochs=5135 \
+#!/bin/bash
+#
+# Wrapper script for AlphaTrade LOBS5 training
+# Sets up environment and runs training
+#
 
+# Source JAX/XLA optimizations
+SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
+if [ -f "$SCRIPT_DIR/jax_xla_optimization.sh" ]; then
+    source "$SCRIPT_DIR/jax_xla_optimization.sh"
+else
+    echo "[WARNING] JAX optimization script not found, using default settings"
+fi
+
+# Debug output
+echo "========================================"
+echo "[Wrapper] Running on node: $(hostname)"
+echo "[Wrapper] SLURM_NODEID: ${SLURM_NODEID:-N/A}"
+echo "[Wrapper] SLURM_PROCID: ${SLURM_PROCID:-N/A}"
+echo "[Wrapper] CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-all}"
+echo "========================================"
+
+# Source conda
+source ~/miniforge3/etc/profile.d/conda.sh
+
+# Activate environment
+conda activate lobs5
+
+# Load CUDA module
+module load cuda/12.6
+
+# Set LD_LIBRARY_PATH for JAX CUDA libraries (complete list from working environment)
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cuda_nvrtc/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cuda_runtime/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cusparse/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cuda_cupti/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cufft/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/nvjitlink/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cusolver/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/nccl/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/nvshmem/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cublas/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cudnn/lib:$LD_LIBRARY_PATH
+
+# JAX environment variables - memory management optimization
+# ✓ Critical: Enable memory preallocate to eliminate 80ms overhead per batch
+export XLA_PYTHON_CLIENT_PREALLOCATE=true   # Preallocate GPU memory (KEY OPTIMIZATION!)
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.90  # Use 90% GPU memory
+
+# JAX distributed coordination service timeout configuration (10 minutes for multi-node)
+export JAX_COORDINATOR_TIMEOUT_MS=600000  # 10 minutes in milliseconds
+export TF_CPP_MIN_LOG_LEVEL=1  # Reduce TensorFlow spam but keep important messages
+
+# Multi-node communication configuration (passed from batch script)
+if [ -n "$JAX_COORDINATOR_ADDRESS" ]; then
+    echo "[Wrapper] Multi-node coordinator: $JAX_COORDINATOR_ADDRESS"
+    # Provide JAX process topology from Slurm
+    export JAX_PROCESS_COUNT=${SLURM_NNODES:-1}
+    export JAX_PROCESS_INDEX=${SLURM_PROCID:-0}
+    # Single task per node → one local process per node
+    export JAX_LOCAL_PROCESS_COUNT=1
+    export JAX_LOCAL_PROCESS_INDEX=0
+    # Make JAX device visibility match CUDA
+    if [ -n "$CUDA_VISIBLE_DEVICES" ]; then
+        export JAX_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"
+    fi
+    echo "[Wrapper] JAX_PROCESS_COUNT=${JAX_PROCESS_COUNT}"
+    echo "[Wrapper] JAX_PROCESS_INDEX=${JAX_PROCESS_INDEX}"
+    echo "[Wrapper] JAX_LOCAL_PROCESS_COUNT=${JAX_LOCAL_PROCESS_COUNT}"
+    echo "[Wrapper] JAX_LOCAL_PROCESS_INDEX=${JAX_LOCAL_PROCESS_INDEX}"
+fi
+
+# Ensure CUDA cache/temp go to a writable path (avoid ptxas tmp errors)
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+if [ -n "$SLURM_TMPDIR" ]; then
+    export TMPDIR="$SLURM_TMPDIR"
+    export CUDA_CACHE_PATH="$SLURM_TMPDIR/.nv/ComputeCache"
+else
+    export CUDA_CACHE_PATH="$HOME/.nv/ComputeCache"
+fi
+mkdir -p "$CUDA_CACHE_PATH" || true
+
+# Check available GPUs
+echo "[Wrapper] Available GPUs:"
+nvidia-smi --list-gpus | head -4
+
+# Run Python with all arguments passed through
 # -u: unbuffered output for real-time logging
-# -B don't write .pyc files
-python3 -u -B run_train.py \
+# -B: don't write .pyc files
+python -u -B run_train.py \
         --C_init=trunc_standard_normal --prenorm=True --batchnorm=False --bidirectional=False \
-        --blocks=16 --bsz=52 --d_model=1024 --dataset=lobster-prediction --merging=padded \
+        --blocks=16 --per_gpu_bsz=13 --d_model=1024 --dataset=lobster-prediction --merging=padded \
         --dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/GOOG2016TO2021' \
         --test_dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/JAN2023/tokenized_lobs5_v2' \
         --data_mode='preproc' \
@@ -50,10 +98,4 @@ python3 -u -B run_train.py \
         --lr_patience=5 \
         --USE_WANDB=True \
         --wandb_project=lobs5-full-autoreg-tok24 \
-        --wandb_entity=kang-oxford 
-        # --wandb_entity=kang-oxford 2>&1 | grep -v "sol_gpu_cost_model"
-        # --restore='/lus/lfs1aip2/home/s5e/kangli.s5e/AlphaTrade/LOBS5/checkpoints/ruby-aardvark-62_98nov1i7' \
-        # --restore_step=37
-        #--restore='checkpoints/eager-shadow-750_af39bb9u/'
-        #5135
-        # --curtail_epochs=5135 \
+        --wandb_entity=kang-oxford

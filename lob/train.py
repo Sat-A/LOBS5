@@ -33,22 +33,37 @@ def train(args):
     best_test_loss = 100000000
     best_test_acc = -10000.0
 
-    #for parameter sweep: get args from wandb server
-    if args is None:
-        args = wandb.config
+    # Initialize wandb (only on process 0 to avoid network load and sync issues)
+    wandb_run_id = None
+
+    if args.USE_WANDB and args.process_index == 0:
+        # Get model size and job ID
+        job_id = os.environ.get("SLURM_JOB_ID", "local")
+
+        # Enhanced run name with configuration details
+        run_name = f"lobs5_d{args.d_model}_l{args.n_layers}_b{args.blocks}_bsz{args.per_gpu_bsz}x{args.num_devices}_seed{args.jax_seed}_jid{job_id}"
+
+        # Initialize WandB
+        wandb.init(
+            entity=args.wandb_entity,
+            project=args.wandb_project,
+            name=run_name,
+            config=vars(args),
+            settings=wandb.Settings(init_timeout=300),
+        )
+        wandb_run_id = wandb.run.id
+        print(f"[*] WandB: Created new run (ID: {wandb_run_id})")
     else:
-        if args.USE_WANDB:
-            # Make wandb config dictionary
-            run = wandb.init(project=args.wandb_project, job_type='model_training', config=vars(args), entity=args.wandb_entity)
-        else:
-            run = wandb.init(mode='offline')
+        # Disable wandb on non-zero processes
+        os.environ["WANDB_MODE"] = "disabled"
 
     ssm_size = args.ssm_size_base
     ssm_lr = args.ssm_lr_base
 
     # determine the size of initial blocks
     block_size = int(ssm_size / args.blocks)
-    wandb.log({"block_size": block_size})
+    if args.USE_WANDB and args.process_index == 0:
+        wandb.log({"block_size": block_size})
 
     # Set global learning rate lr (e.g. encoders, etc.) as function of ssm_lr
     lr = args.lr_factor * ssm_lr
@@ -83,7 +98,8 @@ def train(args):
             seed=args.jax_seed,
             mask_fn=mask_fn,
             msg_seq_len=args.msg_seq_len,
-            bsz=args.bsz,
+            per_gpu_bsz=args.per_gpu_bsz,
+            num_devices=args.num_devices,
             use_book_data=args.use_book_data,
             use_simple_book=args.use_simple_book,
             book_transform=args.book_transform,
@@ -93,11 +109,31 @@ def train(args):
             debug_overfit=args.debug_overfit,
             test_dir=args.test_dir_name if hasattr(args, 'test_dir_name') else None,
             data_mode=args.data_mode if hasattr(args, 'data_mode') else 'preproc',
+            use_distributed_sampler=args.is_distributed,
+            process_rank=args.process_index,
+            process_count=args.process_count,
         )
 
-    
+
 
     print(f"[*] Starting S5 Training on {ds} =>> Initializing...")
+
+    # ========== Synchronization Barrier 4: After Data Loading ==========
+    if hasattr(args, 'process_count') and args.process_count > 1:
+        import time as time_module
+        from jax.experimental import multihost_utils
+        if jax.process_index() == 0:
+            print(f"[*] Synchronization barrier 4/4: Data loading complete, waiting for all nodes...")
+        try:
+            sync_start = time_module.time()
+            multihost_utils.sync_global_devices("data_loading_complete")
+            sync_time = time_module.time() - sync_start
+            if jax.process_index() == 0:
+                print(f"[*] ✓ All {args.process_count} nodes completed data loading (took: {sync_time:.2f}s)")
+                print(f"[*] 🚀 All initialization phases complete, starting distributed training!")
+        except Exception as e:
+            print(f"[ERROR] Synchronization barrier 4/4 failed (process {jax.process_index()}): {e}")
+            raise
     if args.debug_loading:
         state=None
         val_model=None
@@ -158,12 +194,16 @@ def train(args):
     )
 
 
-    if args.ignore_times:
-        # Removing the 5 abs time tokens from the length of the sequence.  
-        dt = [[x] for (x,) in zip([*range(seq_len-5*args.msg_seq_len)])]
+    # Initialize wandb table (only on process 0)
+    if args.process_index == 0:
+        if args.ignore_times:
+            # Removing the 5 abs time tokens from the length of the sequence.
+            dt = [[x] for (x,) in zip([*range(seq_len-5*args.msg_seq_len)])]
+        else:
+            dt = [[x] for (x,) in zip([*range(seq_len)])]
+        ce_table=wandb.Table(columns=["tok"] ,data=dt)
     else:
-        dt = [[x] for (x,) in zip([*range(seq_len)])]
-    ce_table=wandb.Table(columns=["tok"] ,data=dt)
+        ce_table = None
 
     ignore_times=args.ignore_times
     batchnorm=args.batchnorm
@@ -339,7 +379,7 @@ def train(args):
             f" {best_test_acc:.4f} at Epoch {best_epoch + 1}\n"
         )
 
-        if args.log_ce_tables:
+        if args.log_ce_tables and args.process_index == 0:
             ce_table.add_column(name="val_ce_"+str(epoch),data=val_ce_means.tolist())
             ce_table.add_column(name="test_ce_"+str(epoch),data=test_ce_means.tolist())
             ce_table.add_column(name="val_acc_"+str(epoch),data=val_acc_means.tolist())
@@ -348,44 +388,49 @@ def train(args):
             ce_table=wandb.Table(columns=ce_table.columns,data=ce_table.data)
         
 
-        if valloader is not None:
-            wandb.log(
-                {
-                    "Training Loss": train_loss,
-                    "Val loss": val_loss,
-                    "Val Accuracy": val_acc,
-                    "Test Loss": test_loss,
-                    "Test Accuracy": test_acc,
-                    "count": count,
-                    "Learning rate count": lr_count,
-                    "Opt acc": opt_acc,
-                    "lr": float(state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'][0]),
-                    "ssm_lr": float(state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate'][0]),
-                    # "Training CE by token":ce_table
-                }
-            )
-        else:
-            wandb.log(
-                {
-                    "Training Loss": train_loss,
-                    "Val loss": val_loss,
-                    "Val Accuracy": val_acc,
-                    "count": count,
-                    "Learning rate count": lr_count,
-                    "Opt acc": opt_acc,
-                    "lr": float(state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'][0]),
-                    "ssm_lr": float(state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate'][0]),
-                    # "Training CE by token":ce_table
-                }
-            )
+        # Log metrics to wandb (only on process 0)
+        if args.USE_WANDB and args.process_index == 0:
+            if valloader is not None:
+                wandb.log(
+                    {
+                        "Training Loss": train_loss,
+                        "Val loss": val_loss,
+                        "Val Accuracy": val_acc,
+                        "Test Loss": test_loss,
+                        "Test Accuracy": test_acc,
+                        "count": count,
+                        "Learning rate count": lr_count,
+                        "Opt acc": opt_acc,
+                        "lr": float(state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'][0]),
+                        "ssm_lr": float(state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate'][0]),
+                        # "Training CE by token":ce_table
+                    }
+                )
+            else:
+                wandb.log(
+                    {
+                        "Training Loss": train_loss,
+                        "Val loss": val_loss,
+                        "Val Accuracy": val_acc,
+                        "count": count,
+                        "Learning rate count": lr_count,
+                        "Opt acc": opt_acc,
+                        "lr": float(state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'][0]),
+                        "ssm_lr": float(state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate'][0]),
+                        # "Training CE by token":ce_table
+                    }
+                )
 
-        if args.log_ce_tables:
-            wandb.log({"CE by token": ce_table})
-        wandb.run.summary["Best Val Loss"] = best_loss
-        wandb.run.summary["Best Val Accuracy"] = best_acc
-        wandb.run.summary["Best Epoch"] = best_epoch
-        wandb.run.summary["Best Test Loss"] = best_test_loss
-        wandb.run.summary["Best Test Accuracy"] = best_test_acc
+            if args.log_ce_tables:
+                wandb.log({"CE by token": ce_table})
+
+        # Update best metrics in wandb (only on process 0)
+        if args.USE_WANDB and args.process_index == 0:
+            wandb.run.summary["Best Val Loss"] = best_loss
+            wandb.run.summary["Best Val Accuracy"] = best_acc
+            wandb.run.summary["Best Epoch"] = best_epoch
+            wandb.run.summary["Best Test Loss"] = best_test_loss
+            wandb.run.summary["Best Test Accuracy"] = best_test_acc
         # print("IGNORING EARLY STOPPING FOR TINY EPOCH SIZE ")
         # After each epoch
         gc.collect()
