@@ -35,6 +35,7 @@ def train(args):
 
     # Initialize wandb (only on process 0 to avoid network load and sync issues)
     wandb_run_id = None
+    run = None  # Initialize run variable for checkpoint naming
 
     if args.USE_WANDB and args.process_index == 0:
         # Get model size and job ID
@@ -44,7 +45,7 @@ def train(args):
         run_name = f"lobs5_d{args.d_model}_l{args.n_layers}_b{args.blocks}_bsz{args.per_gpu_bsz}x{args.num_devices}_seed{args.jax_seed}_jid{job_id}"
 
         # Initialize WandB
-        wandb.init(
+        run = wandb.init(
             entity=args.wandb_entity,
             project=args.wandb_project,
             name=run_name,
@@ -56,6 +57,12 @@ def train(args):
     else:
         # Disable wandb on non-zero processes
         os.environ["WANDB_MODE"] = "disabled"
+        # Create a dummy run object for checkpoint naming on non-zero processes
+        class DummyRun:
+            def __init__(self):
+                self.name = "offline"
+                self.id = "local"
+        run = DummyRun()
 
     ssm_size = args.ssm_size_base
     ssm_lr = args.ssm_lr_base
@@ -184,24 +191,28 @@ def train(args):
         steps_per_epoch = int(train_size / args.effective_bsz) if args.curtail_epochs is None else args.curtail_epochs+1
         print(f"[DEBUG] Steps calculation (single-node): {train_size:,} / {args.effective_bsz} = {steps_per_epoch:,}")
 
-    # print("USING VERY INFREQUENT CHECKPOINTING FOR TINY EPOCH SIZE ")
-
-    mgr_options = ocp.CheckpointManagerOptions(
-        save_interval_steps=1,
-        create=True,
-        max_to_keep=10,
-        keep_period=5,
-        # step_prefix=f'{run.name}_{run.id}',
-        # enable_async_checkpointing=False,
-    )
-    ckpt_mgr = ocp.CheckpointManager(
-        os.path.abspath(f'checkpoints/{run.name}_{run.id}/'),
-        # ocp.Checkpointer(ocp.PyTreeCheckpointHandler()),
-        # ocp.Checkpointer(ocp.StandardCheckpointHandler()),
-        item_names=('state', 'metadata'),
-        options=mgr_options,
-        metadata=vars(args)
-    )
+    # Create checkpoint manager (only on process 0)
+    if args.process_index == 0:
+        mgr_options = ocp.CheckpointManagerOptions(
+            save_interval_steps=1,
+            create=True,
+            max_to_keep=10,
+            keep_period=5,
+            # step_prefix=f'{run.name}_{run.id}',
+            # enable_async_checkpointing=False,
+        )
+        ckpt_mgr = ocp.CheckpointManager(
+            os.path.abspath(f'checkpoints/{run.name}_{run.id}/'),
+            # ocp.Checkpointer(ocp.PyTreeCheckpointHandler()),
+            # ocp.Checkpointer(ocp.StandardCheckpointHandler()),
+            item_names=('state', 'metadata'),
+            options=mgr_options,
+            metadata=vars(args)
+        )
+        print(f"[*] Checkpoint manager created: checkpoints/{run.name}_{run.id}/")
+    else:
+        ckpt_mgr = None
+        print(f"[*] Process {args.process_index}: Skipping checkpoint manager (only process 0 saves)")
 
 
     # Initialize wandb table (only on process 0)
@@ -348,19 +359,25 @@ def train(args):
                 f" Test Accuracy: {val_acc:.4f}"
             )
 
-        #save checkpoint
-        ckpt = {
-            'model': deduplicate_trainstate(state),
-            'config': vars(args),
-            'metrics': {
-                'loss_train': float(train_loss),
-                'loss_val_ar': float(val_loss),
-                'loss_test_rnn': float(test_loss),
-                'acc_val_ar': float(val_acc),
-                'acc_test_rnn': float(test_acc),
+        # Save checkpoint (only on process 0)
+        if args.process_index == 0:
+            ckpt = {
+                'model': deduplicate_trainstate(state),
+                'config': vars(args),
+                'metrics': {
+                    'loss_train': float(train_loss),
+                    'loss_val_ar': float(val_loss),
+                    'loss_test_rnn': float(test_loss),
+                    'acc_val_ar': float(val_acc),
+                    'acc_test_rnn': float(test_acc),
+                }
             }
-        }
-        save_checkpoint(ckpt_mgr, ckpt, epoch)
+            save_checkpoint(ckpt_mgr, ckpt, epoch)
+            print(f"[*] Checkpoint saved: epoch {epoch}")
+        else:
+            if args.process_index <= 2 or args.process_index == args.process_count - 1:
+                # Only log for first few and last process to avoid spam
+                print(f"[Checkpoint] Process {args.process_index}: Skipped (only process 0 saves)")
 
         # For early stopping purposes
         if val_loss < best_val_loss:
