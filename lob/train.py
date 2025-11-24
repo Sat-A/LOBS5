@@ -159,7 +159,7 @@ def train(args):
             state = ckpt['model']
         
         val_model = model_cls(training=False, step_rescale=1)
-        init_hidden=model_cls().initialize_carry(batch_size=args.bsz//args.num_devices,
+        init_hidden=model_cls().initialize_carry(batch_size=args.per_gpu_bsz,
                                                 hidden_size=(ssm_size // pow(2,int(args.conj_sym))),
                                                 n_message_layers=args.n_message_layers,
                                                 n_book_pre_layers=args.n_book_pre_layers ,
@@ -172,7 +172,17 @@ def train(args):
     count, best_val_loss = 0, 100000000  # This line is for early stopping purposes
     lr_count, opt_acc = 0, -100000000.0  # This line is for learning rate decay
     step = 0  # for per step learning rate decay
-    steps_per_epoch = int(train_size/args.bsz) if args.curtail_epochs is None else args.curtail_epochs+1
+
+    # Calculate steps per epoch (per-process)
+    # - train_size is global sample count
+    # - args.effective_bsz is per-process batch size (per_gpu_bsz × local num_devices)
+    # - In multi-node, each process sees ~1/process_count of the data via DistributedSampler
+    if getattr(args, 'is_distributed', False) and getattr(args, 'process_count', 1) > 1:
+        steps_per_epoch = int(train_size / (args.effective_bsz * args.process_count)) if args.curtail_epochs is None else args.curtail_epochs+1
+        print(f"[DEBUG] Steps calculation (distributed): {train_size:,} / ({args.effective_bsz} × {args.process_count}) = {steps_per_epoch:,}")
+    else:
+        steps_per_epoch = int(train_size / args.effective_bsz) if args.curtail_epochs is None else args.curtail_epochs+1
+        print(f"[DEBUG] Steps calculation (single-node): {train_size:,} / {args.effective_bsz} = {steps_per_epoch:,}")
 
     # print("USING VERY INFREQUENT CHECKPOINTING FOR TINY EPOCH SIZE ")
 
@@ -260,10 +270,13 @@ def train(args):
             trainloader = create_lobster_train_loader(
                 lobster_dataset,
                 int(random.randint(skey, (1,), 0, 100000)[0]),
-                args.bsz,
+                args.effective_bsz,
                 num_workers=args.n_data_workers,
                 reset_train_offsets=args.random_offsets_train,
-                shuffle=args.shuffle_train)
+                shuffle=args.shuffle_train,
+                use_distributed_sampler=args.is_distributed,
+                process_rank=args.process_index,
+                process_count=args.process_count)
         print(f"val model hash: {val_model.__hash__()}")
         print(f"val model apply hash: {val_model.__hash__()}")
 
