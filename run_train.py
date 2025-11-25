@@ -222,9 +222,10 @@ if __name__ == "__main__":
 	from jax import config
 	from jax.experimental import multihost_utils
 
-	# Set precision policy (using default FP32)
-	print("[*] Using FP32 full precision training")
-	config.update("jax_default_matmul_precision", "float32")
+	# DISABLED: Forcing FP32 causes 2x slowdown by disabling TF32 on Hopper GPUs
+	# Let JAX use default "fastest" precision which allows TF32
+	# print("[*] Using FP32 full precision training")
+	# config.update("jax_default_matmul_precision", "float32")
 
 	if is_slurm_multi_node or os.environ.get('JAX_COORDINATOR_ADDRESS'):
 		# Multi-node mode: Explicitly initialize JAX distributed

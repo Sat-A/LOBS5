@@ -5,12 +5,16 @@
 #
 
 # Source JAX/XLA optimizations
+# DISABLED: jax_xla_optimization.sh causes 2x slowdown due to:
+#   - CUDA_DEVICE_MAX_CONNECTIONS=1 (serializes kernels)
+#   - --xla_gpu_force_compilation_parallelism=1 (single-threaded)
+# SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
+# if [ -f "$SCRIPT_DIR/jax_xla_optimization.sh" ]; then
+#     source "$SCRIPT_DIR/jax_xla_optimization.sh"
+# else
+#     echo "[WARNING] JAX optimization script not found, using default settings"
+# fi
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
-if [ -f "$SCRIPT_DIR/jax_xla_optimization.sh" ]; then
-    source "$SCRIPT_DIR/jax_xla_optimization.sh"
-else
-    echo "[WARNING] JAX optimization script not found, using default settings"
-fi
 
 # Debug output
 echo "========================================"
@@ -89,7 +93,7 @@ python -u -B run_train.py \
         --warmup_end=1 --weight_decay=0.05 --msg_seq_len=500 \
         --use_book_data=True --use_simple_book=False --book_transform=True  \
         --masking=none \
-        --num_devices=4 --n_data_workers=0 \
+        --num_devices=4 --n_data_workers=4 \
         --debug_loading=False \
         --enable_profiler=False \
         --random_offsets_train=True \
