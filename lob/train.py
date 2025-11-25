@@ -4,6 +4,7 @@ from jax import random
 import jax.numpy as jnp
 import flax
 import orbax.checkpoint as ocp
+from orbax.checkpoint.checkpoint_manager import MultiprocessingOptions
 
 
 
@@ -192,7 +193,10 @@ def train(args):
         print(f"[DEBUG] Steps calculation (single-node): {train_size:,} / {args.effective_bsz} = {steps_per_epoch:,}")
 
     # Create checkpoint manager (only on process 0)
+    # IMPORTANT: Use active_processes={0} to tell Orbax only process 0 is involved
+    # This prevents Orbax from waiting for other processes in its internal barriers
     if args.process_index == 0:
+        print(f"[DEBUG] Process 0: Creating checkpoint manager options...")
         mgr_options = ocp.CheckpointManagerOptions(
             save_interval_steps=1,
             create=True,
@@ -200,7 +204,11 @@ def train(args):
             keep_period=5,
             # step_prefix=f'{run.name}_{run.id}',
             # enable_async_checkpointing=False,
+            # CRITICAL: Tell Orbax only process 0 participates in checkpointing
+            # This prevents Orbax's internal barriers from waiting for other processes
+            multiprocessing_options=MultiprocessingOptions(primary_host=0, active_processes={0})
         )
+        print(f"[DEBUG] Process 0: Options created, initializing CheckpointManager...")
         ckpt_mgr = ocp.CheckpointManager(
             os.path.abspath(f'checkpoints/{run.name}_{run.id}/'),
             # ocp.Checkpointer(ocp.PyTreeCheckpointHandler()),
@@ -228,6 +236,23 @@ def train(args):
 
     ignore_times=args.ignore_times
     batchnorm=args.batchnorm
+
+    # ========== Synchronization Barrier 5: Before Training Loop ==========
+    # CRITICAL: Ensure all processes are synchronized before entering pmap calls
+    # Without this, process 1 races ahead while process 0 creates checkpoint manager
+    if hasattr(args, 'process_count') and args.process_count > 1:
+        import time as time_module
+        from jax.experimental import multihost_utils
+        print(f"[*] Process {args.process_index}: Barrier 5/5 - Before training loop...")
+        try:
+            sync_start = time_module.time()
+            multihost_utils.sync_global_devices("before_training_loop")
+            sync_time = time_module.time() - sync_start
+            if jax.process_index() == 0:
+                print(f"[*] ✓ All nodes ready to start training (barrier took: {sync_time:.2f}s)")
+        except Exception as e:
+            print(f"[ERROR] Barrier 5/5 failed (process {jax.process_index()}): {e}")
+            raise
 
     for epoch in range(args.epochs):
         print(f"[*] Starting Training Epoch {epoch + 1}...")
