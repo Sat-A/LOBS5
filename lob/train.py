@@ -280,7 +280,7 @@ def train(args):
         print('Training on', args.num_devices, 'devices.')
         train_rng, skey = random.split(train_rng)
 
-        #Pass an initial hidden state to be used in case of the 'RNN' forward pass being used. 
+        #Pass an initial hidden state to be used in case of the 'RNN' forward pass being used.
         state, train_loss,ce_by_tok ,step = train_epoch(state,
                                               skey,
                                               #model_cls,
@@ -297,7 +297,9 @@ def train(args):
                                               init_hidden,
                                               epoch,
                                               ignore_times,
-                                              args.log_ce_tables)
+                                              args.log_ce_tables,
+                                              use_wandb=args.USE_WANDB,
+                                              process_index=args.process_index)
 
         if args.random_offsets_train:
             # reinit training loader, so that sequences are initialised with

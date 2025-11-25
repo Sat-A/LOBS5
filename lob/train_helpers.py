@@ -488,6 +488,8 @@ def train_epoch(
         epoch,
         ignore_times,
         log_ce_tables,
+        use_wandb=False,
+        process_index=0,
     ):
 
     """
@@ -548,6 +550,19 @@ def train_epoch(
             batch_losses.append(loss[0])
             if log_ce_tables:
                 cross_entropies.append(ce)
+
+            # Per-step wandb logging (only on process 0 to avoid duplicates in multi-node)
+            if use_wandb and process_index == 0:
+                import wandb
+                # Get current learning rate for logging
+                current_lr = decay_function(step, lr, end_step, lr_min)
+                wandb.log({
+                    "train/loss_step": float(loss[0]),
+                    "train/step": step,
+                    "train/epoch": epoch,
+                    "train/lr": float(current_lr),
+                })
+
             lr_params = (decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min)
             state, step = update_learning_rate_per_step(lr_params, state)
             if (step>20) & (step<=21) & debug_profiler:
