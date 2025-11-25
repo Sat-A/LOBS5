@@ -278,28 +278,80 @@ def train(args):
         lr_params = (decay_function, ssm_lr, lr, step, end_step, args.opt_config, args.lr_min)
 
         print('Training on', args.num_devices, 'devices.')
-        train_rng, skey = random.split(train_rng)
 
-        #Pass an initial hidden state to be used in case of the 'RNN' forward pass being used.
-        state, train_loss,ce_by_tok ,step = train_epoch(state,
-                                              skey,
-                                              #model_cls,
-                                              #train_model,
-                                              trainloader,
-                                              seq_len,
-                                              #in_dim,
-                                              batchnorm,
-                                              lr_params,
-                                              args.num_devices,
-                                              args.debug_loading,
-                                              args.enable_profiler,
-                                              args.curtail_epochs,
-                                              init_hidden,
-                                              epoch,
-                                              ignore_times,
-                                              args.log_ce_tables,
-                                              use_wandb=args.USE_WANDB,
-                                              process_index=args.process_index)
+        # ===== Intra-Epoch Evaluation Setup =====
+        num_evals_per_epoch = 10
+        eval_interval = steps_per_epoch // num_evals_per_epoch
+        print(f"[*] Intra-epoch evaluation: {num_evals_per_epoch} evals, interval={eval_interval} steps")
+
+        # Create iterator for trainloader (important for resuming training across segments)
+        trainloader_iter = iter(trainloader)
+
+        # ===== Intra-Epoch Loop: Train segments + Validate =====
+        for eval_idx in range(num_evals_per_epoch):
+            print(f"\n[*] Epoch {epoch + 1} - Segment {eval_idx + 1}/{num_evals_per_epoch}")
+
+            train_rng, skey = random.split(train_rng)
+
+            # Determine how many batches to train in this segment
+            is_last_segment = (eval_idx == num_evals_per_epoch - 1)
+            max_batches = None if is_last_segment else eval_interval
+
+            # Train one segment
+            state, train_loss, ce_by_tok, step = train_epoch(
+                state,
+                skey,
+                trainloader_iter,  # Use iterator instead of dataloader
+                seq_len,
+                batchnorm,
+                lr_params,
+                args.num_devices,
+                args.debug_loading,
+                args.enable_profiler,
+                args.curtail_epochs,
+                init_hidden,
+                epoch,
+                ignore_times,
+                args.log_ce_tables,
+                use_wandb=args.USE_WANDB,
+                process_index=args.process_index,
+                max_batches=max_batches  # Limit batches for this segment
+            )
+
+            # Update lr_params with new step count
+            lr_params = (decay_function, ssm_lr, lr, step, end_step, args.opt_config, args.lr_min)
+
+            # Mid-epoch validation (complete validation set)
+            print(f"[*] Mid-Epoch Validation at step {step}")
+            (intra_val_loss, intra_val_acc, _, _) = validate(
+                state,
+                val_model.apply,
+                valloader,
+                seq_len,
+                in_dim,
+                batchnorm,
+                args.num_devices,
+                epoch,
+                curtail_epoch=None,  # Use complete validation set
+                apply_method='__call_ar__',
+                ignore_times=ignore_times,
+                log_ce_tables=False  # Don't log tables for mid-epoch evals
+            )
+
+            print(f"    Train Loss: {train_loss:.5f}, Val Loss: {intra_val_loss:.5f}, Val Acc: {intra_val_acc:.4f}")
+
+            # Log to WandB (only process 0)
+            if args.USE_WANDB and args.process_index == 0:
+                wandb.log({
+                    "intra_epoch/val_loss": intra_val_loss,
+                    "intra_epoch/val_acc": intra_val_acc,
+                    "intra_epoch/train_loss": train_loss,
+                    "intra_epoch/eval_idx": eval_idx,
+                    "intra_epoch/epoch": epoch,
+                }, step=step)
+
+        # End of intra-epoch loop
+        print(f"\n[*] Epoch {epoch + 1} Training Complete - All {num_evals_per_epoch} segments done")
 
         if args.random_offsets_train:
             # reinit training loader, so that sequences are initialised with
@@ -315,11 +367,13 @@ def train(args):
                 use_distributed_sampler=args.is_distributed,
                 process_rank=args.process_index,
                 process_count=args.process_count)
-        print(f"val model hash: {val_model.__hash__()}")
-        print(f"val model apply hash: {val_model.__hash__()}")
+        # ===== End-of-Epoch: Full Validation and Test Evaluation =====
+        print(f"\n{'='*80}")
+        print(f"[*] Epoch {epoch + 1} - Final Evaluation (complete val + test sets)")
+        print(f"{'='*80}")
 
         if valloader is not None:
-            print(f"[*] Running Epoch {epoch + 1} Validation ") #on train set (With call)...
+            print(f"[*] Running Epoch {epoch + 1} Final Validation")
             (val_loss,
               val_acc,
                 val_ce_means,
@@ -461,7 +515,8 @@ def train(args):
                         "lr": float(state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'][0]),
                         "ssm_lr": float(state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate'][0]),
                         # "Training CE by token":ce_table
-                    }
+                    },
+                    step=step  # Use global step for consistency
                 )
             else:
                 wandb.log(
@@ -475,11 +530,12 @@ def train(args):
                         "lr": float(state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'][0]),
                         "ssm_lr": float(state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate'][0]),
                         # "Training CE by token":ce_table
-                    }
+                    },
+                    step=step  # Use global step for consistency
                 )
 
             if args.log_ce_tables:
-                wandb.log({"CE by token": ce_table})
+                wandb.log({"CE by token": ce_table}, step=step)
 
         # Update best metrics in wandb (only on process 0)
         if args.USE_WANDB and args.process_index == 0:

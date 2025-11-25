@@ -490,16 +490,23 @@ def train_epoch(
         log_ce_tables,
         use_wandb=False,
         process_index=0,
+        max_batches=None,  # New: limit number of batches to train (for intra-epoch evaluation)
     ):
 
     """
     Training function for an epoch that loops over batches.
+
+    Args:
+        max_batches: If provided, stop training after processing this many batches.
+                     Used for intra-epoch evaluation to train only a segment of the epoch.
     """
     # Store Metrics
     batch_losses = []
-    cross_entropies= [] #list of 1xNTok losses 
+    cross_entropies= [] #list of 1xNTok losses
 
     decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min = lr_params
+    batches_processed = 0  # Track how many batches we've processed in this call
+
     #with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
     for batch_idx, batch in enumerate(tqdm(trainloader)):
         # print(f"train_epoch: Epoch {epoch} - Batch {batch_idx} / {len(trainloader)}")
@@ -565,9 +572,20 @@ def train_epoch(
 
             lr_params = (decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min)
             state, step = update_learning_rate_per_step(lr_params, state)
+
+            # Increment batch counter
+            batches_processed += 1
+
             if (step>20) & (step<=21) & debug_profiler:
                 jax.profiler.stop_trace()
                 break
+
+            # Check max_batches limit (for intra-epoch evaluation)
+            if (max_batches is not None) and (batches_processed >= max_batches):
+                print(f"[train_epoch] Reached max_batches={max_batches}, stopping segment")
+                break
+
+            # Original curtail_epochs check
             if (curtail_epochs is not None) and (batch_idx>=curtail_epochs):
                 print("Ending epoch early due to curtail_epochs being ",curtail_epochs)
                 break
