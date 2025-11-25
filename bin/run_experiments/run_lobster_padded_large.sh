@@ -103,3 +103,17 @@ python -u -B run_train.py \
         --USE_WANDB=True \
         --wandb_project=lobs5-3072x28-tok24 \
         --wandb_entity=kang-oxford
+
+
+        # ============= Data choices =================
+        # ············· choice A1 ·············
+        # --dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/GOOG2016TO2021' \
+        # --test_dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/JAN2023/tokenized_lobs5_v2' \
+        # --data_mode='preproc' \
+
+
+        # ············· choice A2 ·············
+        # --dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/GOOG2016TO2021_encoded24' \
+        # --test_dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/JAN2023/tokenized_lobs5_v2_encoded24' \
+        # --data_mode='encoded' \
+        # ============= Data choices =================
