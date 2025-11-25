@@ -551,8 +551,8 @@ def train_epoch(
             if log_ce_tables:
                 cross_entropies.append(ce)
 
-            # Per-step wandb logging (only on process 0 to avoid duplicates in multi-node)
-            if use_wandb and process_index == 0:
+            # Per-1000-steps wandb logging (only on process 0 to avoid duplicates in multi-node)
+            if use_wandb and process_index == 0 and step % 1000 == 0:
                 import wandb
                 # Get current learning rate for logging
                 current_lr = decay_function(step, lr, end_step, lr_min)
