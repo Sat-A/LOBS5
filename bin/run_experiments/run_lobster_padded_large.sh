@@ -83,13 +83,13 @@ nvidia-smi --list-gpus | head -4
 # -B: don't write .pyc files
 python -u -B run_train.py \
         --C_init=trunc_standard_normal --prenorm=True --batchnorm=False --bidirectional=False \
-        --blocks=32 --per_gpu_bsz=2 --d_model=2048 --dataset=lobster-prediction --merging=padded \
+        --blocks=40 --per_gpu_bsz=2 --d_model=2560 --dataset=lobster-prediction --merging=padded \
         --dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/GOOG2016TO2021_encoded24' \
         --test_dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/JAN2023/tokenized_lobs5_v2_encoded24' \
         --data_mode='encoded' \
          --clip_eigs=True --activation_fn=half_glu1 \
-        --dt_global=False --epochs=5 --jax_seed=42 --lr_factor=1 --n_layers=24 \
-        --opt_config=standard --p_dropout=0.0 --ssm_lr_base=0.0002 --ssm_size_base=2048 \
+        --dt_global=False --epochs=5 --jax_seed=42 --lr_factor=1 --n_layers=32 \
+        --opt_config=standard --p_dropout=0.0 --ssm_lr_base=0.00008 --ssm_size_base=2560 \
         --warmup_end=1 --weight_decay=0.05 --msg_seq_len=500 \
         --use_book_data=True --use_simple_book=False --book_transform=True  \
         --masking=none \
