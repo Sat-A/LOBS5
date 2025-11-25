@@ -308,7 +308,7 @@ def train(args):
                 args.num_devices,
                 args.debug_loading,
                 args.enable_profiler,
-                args.curtail_epochs,
+                None,  # Disable curtail_epochs in intra-epoch mode (use max_batches instead)
                 init_hidden,
                 epoch,
                 ignore_times,
