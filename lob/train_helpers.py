@@ -551,17 +551,17 @@ def train_epoch(
             if log_ce_tables:
                 cross_entropies.append(ce)
 
-            # Per-1000-steps wandb logging (only on process 0 to avoid duplicates in multi-node)
-            if use_wandb and process_index == 0 and step % 1000 == 0:
-                import wandb
-                # Get current learning rate for logging
-                current_lr = decay_function(step, lr, end_step, lr_min)
-                wandb.log({
-                    "train/loss_step": float(loss[0]),
-                    "train/step": step,
-                    "train/epoch": epoch,
-                    "train/lr": float(current_lr),
-                })
+            # DISABLED: Per-step wandb logging causes ~10% slowdown even at 1000-step intervals
+            # Only using per-epoch logging in train.py instead
+            # if use_wandb and process_index == 0 and step % 1000 == 0:
+            #     import wandb
+            #     current_lr = decay_function(step, lr, end_step, lr_min)
+            #     wandb.log({
+            #         "train/loss_step": float(loss[0]),
+            #         "train/step": step,
+            #         "train/epoch": epoch,
+            #         "train/lr": float(current_lr),
+            #     })
 
             lr_params = (decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min)
             state, step = update_learning_rate_per_step(lr_params, state)
