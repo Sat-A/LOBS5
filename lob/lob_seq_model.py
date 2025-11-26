@@ -1,3 +1,4 @@
+import math
 from functools import partial
 from typing import Tuple
 import jax
@@ -60,7 +61,9 @@ class LobPredModel(nn.Module):
                             bn_momentum=self.bn_momentum,
                             step_rescale=self.step_rescale,
                                         )
-        self.decoder = nn.Dense(self.d_output)
+        # GPT风格初始化: stddev = 0.02 / sqrt(n_layers) 防止梯度爆炸
+        gpt_init = nn.initializers.normal(stddev=0.02 / math.sqrt(self.n_layers))
+        self.decoder = nn.Dense(self.d_output, kernel_init=gpt_init)
 
     def __call__(self, x, integration_timesteps):
         """
@@ -167,7 +170,10 @@ class LobBookModel(nn.Module):
                 bn_momentum=self.bn_momentum,
                 step_rescale=self.step_rescale,
             ) for _ in range(self.n_pre_layers))
-        self.projection = nn.Dense(self.d_model)  # project to d_model
+        # GPT风格初始化: stddev = 0.02 / sqrt(n_layers) 防止梯度爆炸
+        n_total_layers = self.n_pre_layers + self.n_post_layers
+        gpt_init = nn.initializers.normal(stddev=0.02 / math.sqrt(n_total_layers))
+        self.projection = nn.Dense(self.d_model, kernel_init=gpt_init)  # project to d_model
         self.post_layers = tuple(
             SequenceLayer(
                 ssm=self.ssm,

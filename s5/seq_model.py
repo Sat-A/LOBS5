@@ -1,3 +1,4 @@
+import math
 import jax
 import jax.numpy as np
 from flax import linen as nn
@@ -38,10 +39,13 @@ class StackedEncoderModel(nn.Module):
         """
         Initializes a linear encoder and the stack of S5 layers.
         """
+        # GPT风格初始化: stddev = 0.02 / sqrt(n_layers) 防止梯度爆炸
+        gpt_init = nn.initializers.normal(stddev=0.02 / math.sqrt(self.n_layers))
+
         if self.use_embed_layer:
             self.encoder = nn.Embed(self.vocab_size, self.d_model)
         else:
-            self.encoder = nn.Dense(self.d_model)
+            self.encoder = nn.Dense(self.d_model, kernel_init=gpt_init)
 
         #NOTE:  popjaxrl S5 doesn't have an encoding layer, tbd if this makes a differnce. 
 
