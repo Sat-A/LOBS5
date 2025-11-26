@@ -36,9 +36,18 @@ module load cuda/12.6
 # Set LD_LIBRARY_PATH for JAX CUDA libraries (complete list from working environment)
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cuda_nvrtc/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cuda_runtime/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cusparse/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cuda_cupti/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cufft/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/nvjitlink/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cusolver/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/nccl/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/nvshmem/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cublas/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cudnn/lib:$LD_LIBRARY_PATH
 
+# **************** BF16 vs FP32 梯度对比测试 ****************
+# USE_BF16=1 (default): Enable BF16 mixed precision
+# USE_BF16=0: Disable BF16, use FP32
+# GRAD_STATS_PRECISION: Label for gradient stats JSON output (bf16/fp32)
+export USE_BF16=${USE_BF16:-1}
+export GRAD_STATS_PRECISION=${GRAD_STATS_PRECISION:-bf16}
+echo "[Wrapper] Precision mode: USE_BF16=$USE_BF16, GRAD_STATS_PRECISION=$GRAD_STATS_PRECISION"
+# **************** BF16 vs FP32 梯度对比测试 ****************
+
 # **************** MULTI NODES COMMUNICATIONS OPTIMIZATION ****************
 # ✓ Critical: Enable memory preallocate to eliminate 80ms overhead per batch
-export XLA_PYTHON_CLIENT_PREALLOCATE=true   # Preallocate GPU memory 
+export XLA_PYTHON_CLIENT_PREALLOCATE=true   # Preallocate GPU memory
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.90    # Use 90% GPU memory 
 
 # XLA optimization 
