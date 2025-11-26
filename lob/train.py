@@ -457,6 +457,12 @@ def train(args):
 
             # ===== Intra-Epoch Checkpoint Save =====
             # Save checkpoint after each segment (only process 0)
+            # IMPORTANT: Synchronize all processes before/after checkpoint save to prevent deadlock
+            # Without this, process 1 may enter the next segment's pmap while process 0 is still saving
+            if hasattr(args, 'process_count') and args.process_count > 1:
+                from jax.experimental import multihost_utils
+                multihost_utils.sync_global_devices("before_checkpoint_save")
+
             if args.process_index == 0 and ckpt_mgr is not None:
                 intra_ckpt = {
                     'model': deduplicate_trainstate(state),
@@ -477,6 +483,9 @@ def train(args):
                 ckpt_step = epoch * num_evals_per_epoch + eval_idx
                 save_checkpoint(ckpt_mgr, intra_ckpt, ckpt_step)
                 print(f"[*] Intra-epoch checkpoint saved: epoch {epoch}, segment {eval_idx}, step {step}, dataloader_seed {current_dataloader_seed}")
+
+            if hasattr(args, 'process_count') and args.process_count > 1:
+                multihost_utils.sync_global_devices("after_checkpoint_save")
 
         # End of intra-epoch loop
         print(f"\n[*] Epoch {epoch + 1} Training Complete - All {num_evals_per_epoch} segments done")
