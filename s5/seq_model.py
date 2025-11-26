@@ -40,17 +40,17 @@ class StackedEncoderModel(nn.Module):
         Initializes a linear encoder and the stack of S5 layers.
         """
         # GPT风格初始化: stddev = 0.02 / sqrt(n_layers) 防止梯度爆炸
-        # gpt_init = nn.initializers.normal(stddev=0.02 / math.sqrt(self.n_layers))
+        gpt_init = nn.initializers.normal(stddev=0.02 / math.sqrt(self.n_layers))
 
         # Kaiming He初始化: variance = 2/fan_in, 适合GELU激活
-        kaiming_init = nn.initializers.variance_scaling(
-            scale=2.0, mode='fan_in', distribution='truncated_normal'
-        )
+        # kaiming_init = nn.initializers.variance_scaling(
+        #     scale=2.0, mode='fan_in', distribution='truncated_normal'
+        # )
 
         if self.use_embed_layer:
             self.encoder = nn.Embed(self.vocab_size, self.d_model)
         else:
-            self.encoder = nn.Dense(self.d_model, kernel_init=kaiming_init)
+            self.encoder = nn.Dense(self.d_model, kernel_init=gpt_init)
 
         #NOTE:  popjaxrl S5 doesn't have an encoding layer, tbd if this makes a differnce. 
 
