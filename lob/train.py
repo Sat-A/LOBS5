@@ -254,7 +254,44 @@ def train(args):
             print(f"[ERROR] Barrier 5/5 failed (process {jax.process_index()}): {e}")
             raise
 
-    for epoch in range(args.epochs):
+    # ===== Check for Resume from Intra-Epoch Checkpoint =====
+    start_epoch = 0
+    start_segment = 0
+    resume_from_checkpoint = False
+
+    if ckpt_mgr is not None and ckpt_mgr.latest_step() is not None:
+        latest_step = ckpt_mgr.latest_step()
+        print(f"[*] Found checkpoint at step {latest_step}, attempting to load...")
+
+        try:
+            # Load checkpoint metadata to get resume info
+            restored = ckpt_mgr.restore(latest_step)
+            if restored is not None and 'resume_info' in restored:
+                resume_info = restored['resume_info']
+                start_epoch = resume_info['epoch']
+                start_segment = resume_info['segment_idx'] + 1  # Start from next segment
+                restored_step = resume_info['global_step']
+
+                # If we finished all segments in this epoch, move to next epoch
+                if start_segment >= resume_info['num_evals_per_epoch']:
+                    start_epoch += 1
+                    start_segment = 0
+
+                print(f"[*] Resuming from: epoch {start_epoch}, segment {start_segment}, global_step {restored_step}")
+
+                # Restore model state
+                state = restored['model']
+                step = restored_step
+                resume_from_checkpoint = True
+
+                print(f"[*] Model state restored successfully")
+            else:
+                print(f"[*] Checkpoint found but no resume_info, starting from scratch")
+        except Exception as e:
+            print(f"[WARNING] Failed to restore checkpoint: {e}")
+            print(f"[*] Starting training from scratch")
+
+    for epoch in range(start_epoch, args.epochs):
         print(f"[*] Starting Training Epoch {epoch + 1}...")
         # jax.profiler.start_trace("./jax-traces")
 
@@ -287,8 +324,28 @@ def train(args):
         # Create iterator for trainloader (important for resuming training across segments)
         trainloader_iter = iter(trainloader)
 
+        # ===== Skip Already Trained Batches (for Resume) =====
+        # Determine which segment to start from
+        current_start_segment = start_segment if epoch == start_epoch else 0
+
+        if current_start_segment > 0:
+            batches_to_skip = current_start_segment * eval_interval
+            print(f"[*] Resuming: skipping {batches_to_skip} batches ({current_start_segment} segments)...")
+
+            from tqdm import tqdm
+            skipped = 0
+            for _ in tqdm(range(batches_to_skip), desc="Fast-forwarding", disable=(args.process_index != 0)):
+                try:
+                    _ = next(trainloader_iter)
+                    skipped += 1
+                except StopIteration:
+                    print(f"[WARNING] DataLoader exhausted after skipping {skipped} batches")
+                    break
+
+            print(f"[*] Skipped {skipped} batches, resuming from segment {current_start_segment}")
+
         # ===== Intra-Epoch Loop: Train segments + Validate =====
-        for eval_idx in range(num_evals_per_epoch):
+        for eval_idx in range(current_start_segment, num_evals_per_epoch):
             print(f"\n[*] Epoch {epoch + 1} - Segment {eval_idx + 1}/{num_evals_per_epoch}")
 
             train_rng, skey = random.split(train_rng)
@@ -353,6 +410,28 @@ def train(args):
                     }, step=step)
             else:
                 print(f"    Train Loss: {train_loss:.5f} (skipping validation, will run at end of epoch)")
+
+            # ===== Intra-Epoch Checkpoint Save =====
+            # Save checkpoint after each segment (only process 0)
+            if args.process_index == 0 and ckpt_mgr is not None:
+                intra_ckpt = {
+                    'model': deduplicate_trainstate(state),
+                    'config': vars(args),
+                    'resume_info': {
+                        'epoch': epoch,
+                        'segment_idx': eval_idx,
+                        'global_step': step,
+                        'num_evals_per_epoch': num_evals_per_epoch,
+                        'eval_interval': eval_interval,
+                    },
+                    'metrics': {
+                        'train_loss': float(train_loss),
+                    }
+                }
+                # Use a unique step that encodes both epoch and segment
+                ckpt_step = epoch * num_evals_per_epoch + eval_idx
+                save_checkpoint(ckpt_mgr, intra_ckpt, ckpt_step)
+                print(f"[*] Intra-epoch checkpoint saved: epoch {epoch}, segment {eval_idx}, step {step}")
 
         # End of intra-epoch loop
         print(f"\n[*] Epoch {epoch + 1} Training Complete - All {num_evals_per_epoch} segments done")
