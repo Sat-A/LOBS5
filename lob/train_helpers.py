@@ -649,6 +649,14 @@ def train_step(
         # BF16 Mixed Precision: params are already BF16 from initialization
         # No need for tree_map here - direct use saves 30-40% overhead
 
+        # ===== NaN检测点1: 输入参数 =====
+        params_has_nan = jax.tree_util.tree_reduce(
+            lambda a, b: a | b,
+            jax.tree_util.tree_map(lambda x: np.any(np.isnan(x)), params),
+            False
+        )
+        jax.debug.print("[NaN Check 1] Params has NaN: {}", params_has_nan)
+
         if batchnorm:
             logits, mod_vars = state.apply_fn(
                 {"params": params, "batch_stats": state.batch_stats},
@@ -665,6 +673,10 @@ def train_step(
                 mutable=["intermediates"],
                 method='__call_ar__'
             )
+
+        # ===== NaN检测点2: Forward输出 =====
+        logits_has_nan = np.any(np.isnan(logits))
+        jax.debug.print("[NaN Check 2] Logits has NaN: {}, dtype: {}", logits_has_nan, logits.dtype)
 
         # BF16 Mixed Precision: Cast logits back to FP32 for loss computation
         logits = logits.astype(np.float32)
@@ -686,12 +698,38 @@ def train_step(
         # jax.debug.print("Shape of CE: {}", ce.shape)
         # average cross-ent loss
         loss = np.mean(ce)
-        # jax.debug.print("Shape of loss: {}", loss.shape)
+
+        # ===== NaN检测点3: Loss =====
+        loss_has_nan = np.isnan(loss)
+        jax.debug.print("[NaN Check 3] Loss has NaN: {}, value: {:.6f}", loss_has_nan, loss)
+
         return loss, (mod_vars, logits,ce)
 
     (loss, (mod_vars, logits,ce)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
 
+    # ===== NaN检测点4: 梯度 =====
+    grads_has_nan = jax.tree_util.tree_reduce(
+        lambda a, b: a | b,
+        jax.tree_util.tree_map(lambda x: np.any(np.isnan(x)), grads),
+        False
+    )
+    jax.debug.print("[NaN Check 4] Grads has NaN: {}", grads_has_nan)
 
+    # ===== NaN检测点5: 梯度范数 =====
+    grad_norm = np.sqrt(jax.tree_util.tree_reduce(
+        lambda a, b: a + b,
+        jax.tree_util.tree_map(lambda x: np.sum(x.astype(np.float32) ** 2), grads),
+        0.0
+    ))
+    jax.debug.print("[NaN Check 5] Grad norm: {:.6f}", grad_norm)
+
+    # ===== 梯度裁剪 (Gradient Clipping) =====
+    # 使用全局范数裁剪，max_norm=1.0
+    MAX_GRAD_NORM = 1.0
+    clip_factor = np.minimum(1.0, MAX_GRAD_NORM / (grad_norm + 1e-6))
+    grads = jax.tree_util.tree_map(lambda g: g * clip_factor, grads)
+    jax.debug.print("[Grad Clip] clip_factor: {:.6f}, clipped_norm: {:.6f}",
+                    clip_factor, grad_norm * clip_factor)
 
     # UPDATE
     # calculate means over device dimension (first)
@@ -704,6 +742,14 @@ def train_step(
         state = state.apply_gradients(grads=grads, batch_stats=mod_vars["batch_stats"])
     else:
         state = state.apply_gradients(grads=grads)
+
+    # ===== NaN检测点6: 更新后参数 =====
+    new_params_has_nan = jax.tree_util.tree_reduce(
+        lambda a, b: a | b,
+        jax.tree_util.tree_map(lambda x: np.any(np.isnan(x)), state.params),
+        False
+    )
+    jax.debug.print("[NaN Check 6] Updated params has NaN: {}", new_params_has_nan)
 
     #return loss, mod_vars, grads, state
     return state, loss, ce, logits
