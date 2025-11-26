@@ -280,7 +280,7 @@ def train(args):
         print('Training on', args.num_devices, 'devices.')
 
         # ===== Intra-Epoch Evaluation Setup =====
-        num_evals_per_epoch = 10
+        num_evals_per_epoch = 5
         eval_interval = steps_per_epoch // num_evals_per_epoch
         print(f"[*] Intra-epoch evaluation: {num_evals_per_epoch} evals, interval={eval_interval} steps")
 
@@ -321,34 +321,38 @@ def train(args):
             # Update lr_params with new step count
             lr_params = (decay_function, ssm_lr, lr, step, end_step, args.opt_config, args.lr_min)
 
-            # Mid-epoch validation (complete validation set)
-            print(f"[*] Mid-Epoch Validation at step {step}")
-            (intra_val_loss, intra_val_acc, _, _) = validate(
-                state,
-                val_model.apply,
-                valloader,
-                seq_len,
-                in_dim,
-                batchnorm,
-                args.num_devices,
-                epoch,
-                curtail_epoch=None,  # Use complete validation set
-                apply_method='__call_ar__',
-                ignore_times=ignore_times,
-                log_ce_tables=False  # Don't log tables for mid-epoch evals
-            )
+            # Skip validation for last segment (will run full validation at end of epoch)
+            if not is_last_segment:
+                # Mid-epoch validation (complete validation set)
+                print(f"[*] Mid-Epoch Validation at step {step}")
+                (intra_val_loss, intra_val_acc, _, _) = validate(
+                    state,
+                    val_model.apply,
+                    valloader,
+                    seq_len,
+                    in_dim,
+                    batchnorm,
+                    args.num_devices,
+                    epoch,
+                    curtail_epoch=None,  # Use complete validation set
+                    apply_method='__call_ar__',
+                    ignore_times=ignore_times,
+                    log_ce_tables=False  # Don't log tables for mid-epoch evals
+                )
 
-            print(f"    Train Loss: {train_loss:.5f}, Val Loss: {intra_val_loss:.5f}, Val Acc: {intra_val_acc:.4f}")
+                print(f"    Train Loss: {train_loss:.5f}, Val Loss: {intra_val_loss:.5f}, Val Acc: {intra_val_acc:.4f}")
 
-            # Log to WandB (only process 0)
-            if args.USE_WANDB and args.process_index == 0:
-                wandb.log({
-                    "intra_epoch/val_loss": intra_val_loss,
-                    "intra_epoch/val_acc": intra_val_acc,
-                    "intra_epoch/train_loss": train_loss,
-                    "intra_epoch/eval_idx": eval_idx,
-                    "intra_epoch/epoch": epoch,
-                }, step=step)
+                # Log to WandB (only process 0)
+                if args.USE_WANDB and args.process_index == 0:
+                    wandb.log({
+                        "intra_epoch/val_loss": intra_val_loss,
+                        "intra_epoch/val_acc": intra_val_acc,
+                        "intra_epoch/train_loss": train_loss,
+                        "intra_epoch/eval_idx": eval_idx,
+                        "intra_epoch/epoch": epoch,
+                    }, step=step)
+            else:
+                print(f"    Train Loss: {train_loss:.5f} (skipping validation, will run at end of epoch)")
 
         # End of intra-epoch loop
         print(f"\n[*] Epoch {epoch + 1} Training Complete - All {num_evals_per_epoch} segments done")

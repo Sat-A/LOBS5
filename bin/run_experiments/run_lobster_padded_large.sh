@@ -36,14 +36,26 @@ module load cuda/12.6
 # Set LD_LIBRARY_PATH for JAX CUDA libraries (complete list from working environment)
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cuda_nvrtc/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cuda_runtime/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cusparse/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cuda_cupti/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cufft/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/nvjitlink/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cusolver/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/nccl/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/nvshmem/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cublas/lib:$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cudnn/lib:$LD_LIBRARY_PATH
 
-# JAX environment variables - memory management optimization
+# **************** MULTI NODES COMMUNICATIONS OPTIMIZATION ****************
 # ✓ Critical: Enable memory preallocate to eliminate 80ms overhead per batch
-export XLA_PYTHON_CLIENT_PREALLOCATE=true   # Preallocate GPU memory (KEY OPTIMIZATION!)
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.90  # Use 90% GPU memory
+export XLA_PYTHON_CLIENT_PREALLOCATE=true   # Preallocate GPU memory 
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.90    # Use 90% GPU memory 
+
+# XLA optimization 
+# export XLA_FLAGS="--xla_gpu_enable_analytical_sol_latency_estimator=false"
+
+# NCCL multi-node optimization 
+# Disable P2P and SHM for cross-node communication via Slingshot
+# export NCCL_P2P_DISABLE=1
+# export NCCL_P2P_DIRECT_DISABLE=1
+# export NCCL_SHM_DISABLE=1
 
 # JAX distributed coordination service timeout configuration (10 minutes for multi-node)
 export JAX_COORDINATOR_TIMEOUT_MS=600000  # 10 minutes in milliseconds
 export TF_CPP_MIN_LOG_LEVEL=1  # Reduce TensorFlow spam but keep important messages
+
+# export NCCL_IB_DISABLE=1       # Disable InfiniBand (Slingshot uses Ethernet)
+# **************** MULTI NODES COMMUNICATIONS OPTIMIZATION ****************
 
 # Multi-node communication configuration (passed from batch script)
 if [ -n "$JAX_COORDINATOR_ADDRESS" ]; then
@@ -83,7 +95,7 @@ nvidia-smi --list-gpus | head -4
 # -B: don't write .pyc files
 python -u -B run_train.py \
         --C_init=trunc_standard_normal --prenorm=True --batchnorm=False --bidirectional=False \
-        --blocks=48 --per_gpu_bsz=1 --d_model=3072 --dataset=lobster-prediction --merging=padded \
+        --blocks=48 --per_gpu_bsz=2 --d_model=3072 --dataset=lobster-prediction --merging=padded \
         --dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/GOOG2016TO2021_encoded24' \
         --test_dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/JAN2023/tokenized_lobs5_v2_encoded24' \
         --data_mode='encoded' \
