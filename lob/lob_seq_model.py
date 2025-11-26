@@ -62,8 +62,13 @@ class LobPredModel(nn.Module):
                             step_rescale=self.step_rescale,
                                         )
         # GPT风格初始化: stddev = 0.02 / sqrt(n_layers) 防止梯度爆炸
-        gpt_init = nn.initializers.normal(stddev=0.02 / math.sqrt(self.n_layers))
-        self.decoder = nn.Dense(self.d_output, kernel_init=gpt_init)
+        # gpt_init = nn.initializers.normal(stddev=0.02 / math.sqrt(self.n_layers))
+
+        # Kaiming He初始化: variance = 2/fan_in, 适合GELU激活
+        kaiming_init = nn.initializers.variance_scaling(
+            scale=2.0, mode='fan_in', distribution='truncated_normal'
+        )
+        self.decoder = nn.Dense(self.d_output, kernel_init=kaiming_init)
 
     def __call__(self, x, integration_timesteps):
         """
@@ -171,9 +176,14 @@ class LobBookModel(nn.Module):
                 step_rescale=self.step_rescale,
             ) for _ in range(self.n_pre_layers))
         # GPT风格初始化: stddev = 0.02 / sqrt(n_layers) 防止梯度爆炸
-        n_total_layers = self.n_pre_layers + self.n_post_layers
-        gpt_init = nn.initializers.normal(stddev=0.02 / math.sqrt(n_total_layers))
-        self.projection = nn.Dense(self.d_model, kernel_init=gpt_init)  # project to d_model
+        # n_total_layers = self.n_pre_layers + self.n_post_layers
+        # gpt_init = nn.initializers.normal(stddev=0.02 / math.sqrt(n_total_layers))
+
+        # Kaiming He初始化: variance = 2/fan_in, 适合GELU激活
+        kaiming_init = nn.initializers.variance_scaling(
+            scale=2.0, mode='fan_in', distribution='truncated_normal'
+        )
+        self.projection = nn.Dense(self.d_model, kernel_init=kaiming_init)  # project to d_model
         self.post_layers = tuple(
             SequenceLayer(
                 ssm=self.ssm,
