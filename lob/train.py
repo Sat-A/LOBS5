@@ -208,7 +208,8 @@ def train(args):
             max_to_keep=10,
             keep_period=5,
             # step_prefix=f'{run.name}_{run.id}',
-            # enable_async_checkpointing=False,
+            # Disable async checkpointing to avoid multi-node issues
+            enable_async_checkpointing=False,
             # CRITICAL: Tell Orbax only process 0 participates in checkpointing
             # This prevents Orbax's internal barriers from waiting for other processes
             multiprocessing_options=MultiprocessingOptions(primary_host=0, active_processes={0})
@@ -457,15 +458,21 @@ def train(args):
 
             # ===== Intra-Epoch Checkpoint Save =====
             # Save checkpoint after each segment (only process 0)
-            # IMPORTANT: Synchronize all processes before/after checkpoint save to prevent deadlock
-            # Without this, process 1 may enter the next segment's pmap while process 0 is still saving
-            if hasattr(args, 'process_count') and args.process_count > 1:
-                from jax.experimental import multihost_utils
-                multihost_utils.sync_global_devices("before_checkpoint_save")
+            # Multi-node: use barrier BEFORE checkpoint to sync, then only process 0 saves
+            is_multi_node = hasattr(args, 'process_count') and args.process_count > 1
+
+            if is_multi_node:
+                from jax.experimental import multihost_utils as mhu_ckpt
+                print(f"[*] Process {args.process_index}: entering checkpoint_save barrier")
+                mhu_ckpt.sync_global_devices("checkpoint_save")
+                print(f"[*] Process {args.process_index}: passed checkpoint_save barrier")
 
             if args.process_index == 0 and ckpt_mgr is not None:
+                # Deduplicate state: take first replica and place on CPU for serialization
+                # This works for both single-node and multi-node (each process only sees local devices)
+                dedup_state = jax.tree.map(lambda x: jax.device_get(x[0]), state)
                 intra_ckpt = {
-                    'model': deduplicate_trainstate(state),
+                    'model': dedup_state,
                     'config': vars(args),
                     'resume_info': {
                         'epoch': epoch,
@@ -484,8 +491,11 @@ def train(args):
                 save_checkpoint(ckpt_mgr, intra_ckpt, ckpt_step)
                 print(f"[*] Intra-epoch checkpoint saved: epoch {epoch}, segment {eval_idx}, step {step}, dataloader_seed {current_dataloader_seed}")
 
-            if hasattr(args, 'process_count') and args.process_count > 1:
-                multihost_utils.sync_global_devices("after_checkpoint_save")
+            # Second barrier after checkpoint save to ensure all processes sync before next segment
+            if is_multi_node:
+                print(f"[*] Process {args.process_index}: entering post_checkpoint barrier")
+                mhu_ckpt.sync_global_devices("post_checkpoint")
+                print(f"[*] Process {args.process_index}: passed post_checkpoint barrier")
 
         # End of intra-epoch loop
         print(f"\n[*] Epoch {epoch + 1} Training Complete - All {num_evals_per_epoch} segments done")

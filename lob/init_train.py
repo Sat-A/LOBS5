@@ -34,10 +34,12 @@ def deduplicate_trainstate(
         state: TrainState,
     ) -> TrainState:
     """
+    Extract single copy of replicated state and place on local GPU 0.
+    Uses jax.local_devices() for multi-node compatibility.
     """
     return jax.device_put(
         jax.tree.map(lambda x: x[0], state),
-        device=jax.devices('gpu')[0]
+        device=jax.local_devices()[0]
     )
 
 def load_args_from_checkpoint(
