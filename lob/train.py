@@ -361,8 +361,8 @@ def train(args):
 
         # ===== Intra-Epoch Evaluation Setup =====
         num_evals_per_epoch = 5
-        # DEBUG: 每segment只训练10个batch用于测试resume功能
-        eval_interval = 10  # steps_per_epoch // num_evals_per_epoch
+        # DEBUG: 每segment只训练100个batch用于测试梯度统计
+        eval_interval = 100  # steps_per_epoch // num_evals_per_epoch
         print(f"[*] Intra-epoch evaluation: {num_evals_per_epoch} evals, interval={eval_interval} steps (DEBUG MODE)")
 
         # Create iterator for trainloader (important for resuming training across segments)
@@ -396,8 +396,8 @@ def train(args):
 
             # Determine how many batches to train in this segment
             is_last_segment = (eval_idx == num_evals_per_epoch - 1)
-            # DEBUG: 每segment只训练10个batch
-            max_batches = 10  # None if is_last_segment else eval_interval
+            # DEBUG: 每segment只训练100个batch
+            max_batches = 100  # None if is_last_segment else eval_interval
 
             # Train one segment
             state, train_loss, ce_by_tok, step = train_epoch(

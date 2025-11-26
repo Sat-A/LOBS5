@@ -41,7 +41,7 @@ export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cuda_nv
 # USE_BF16=0: Disable BF16, use FP32
 # GRAD_STATS_PRECISION: Label for gradient stats JSON output (bf16/fp32)
 export USE_BF16=${USE_BF16:-1}
-export GRAD_STATS_PRECISION=${GRAD_STATS_PRECISION:-bf16}
+export GRAD_STATS_PRECISION=${GRAD_STATS_PRECISION:-bf16_kaiming_init}
 echo "[Wrapper] Precision mode: USE_BF16=$USE_BF16, GRAD_STATS_PRECISION=$GRAD_STATS_PRECISION"
 # **************** BF16 vs FP32 梯度对比测试 ****************
 

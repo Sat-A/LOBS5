@@ -763,14 +763,14 @@ def train_step(
     # 使用callback在host端执行文件写入
     jax.debug.callback(write_grad_stats, state.step, grad_norm, leaf_norms_with_path)
 
-    # ===== 梯度裁剪 (Gradient Clipping) =====
-    # 使用全局范数裁剪
-    # 注: GPT初始化后梯度范数约4M，使用10000保持合理有效学习率
-    MAX_GRAD_NORM = 10000.0
-    clip_factor = np.minimum(1.0, MAX_GRAD_NORM / (grad_norm + 1e-6))
-    grads = jax.tree_util.tree_map(lambda g: g * clip_factor, grads)
-    jax.debug.print("[Grad Clip] clip_factor: {:.6f}, clipped_norm: {:.6f}",
-                    clip_factor, grad_norm * clip_factor)
+    # # ===== 梯度裁剪 (Gradient Clipping) =====
+    # # 使用全局范数裁剪
+    # # 注: GPT初始化后梯度范数约4M，使用10000保持合理有效学习率
+    # MAX_GRAD_NORM = 10000.0
+    # clip_factor = np.minimum(1.0, MAX_GRAD_NORM / (grad_norm + 1e-6))
+    # grads = jax.tree_util.tree_map(lambda g: g * clip_factor, grads)
+    # jax.debug.print("[Grad Clip] clip_factor: {:.6f}, clipped_norm: {:.6f}",
+    #                 clip_factor, grad_norm * clip_factor)
 
     # UPDATE
     # calculate means over device dimension (first)
