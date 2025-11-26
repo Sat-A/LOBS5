@@ -358,8 +358,9 @@ def train(args):
 
         # ===== Intra-Epoch Evaluation Setup =====
         num_evals_per_epoch = 5
-        eval_interval = steps_per_epoch // num_evals_per_epoch
-        print(f"[*] Intra-epoch evaluation: {num_evals_per_epoch} evals, interval={eval_interval} steps")
+        # DEBUG: 每segment只训练10个batch用于测试resume功能
+        eval_interval = 10  # steps_per_epoch // num_evals_per_epoch
+        print(f"[*] Intra-epoch evaluation: {num_evals_per_epoch} evals, interval={eval_interval} steps (DEBUG MODE)")
 
         # Create iterator for trainloader (important for resuming training across segments)
         trainloader_iter = iter(trainloader)
@@ -392,7 +393,8 @@ def train(args):
 
             # Determine how many batches to train in this segment
             is_last_segment = (eval_idx == num_evals_per_epoch - 1)
-            max_batches = None if is_last_segment else eval_interval
+            # DEBUG: 每segment只训练10个batch
+            max_batches = 10  # None if is_last_segment else eval_interval
 
             # Train one segment
             state, train_loss, ce_by_tok, step = train_epoch(
@@ -431,7 +433,7 @@ def train(args):
                     batchnorm,
                     args.num_devices,
                     epoch,
-                    curtail_epoch=None,  # Use complete validation set
+                    curtail_epoch=10,  # DEBUG: validation只跑10个batch
                     apply_method='__call_ar__',
                     ignore_times=ignore_times,
                     log_ce_tables=False  # Don't log tables for mid-epoch evals
@@ -512,7 +514,7 @@ def train(args):
                                         batchnorm,
                                         args.num_devices,
                                         epoch,
-                                        curtail_epoch=args.curtail_epochs,
+                                        curtail_epoch=10,  # DEBUG: validation只跑10个batch
                                         apply_method='__call_ar__',
                                         ignore_times=ignore_times,
                                         log_ce_tables=args.log_ce_tables)
@@ -528,7 +530,7 @@ def train(args):
                                            batchnorm,
                                            args.num_devices,
                                            epoch,
-                                           curtail_epoch=args.curtail_epochs,
+                                           curtail_epoch=10,  # DEBUG: test只跑10个batch
                                            apply_method='__call_ar__',
                                            ignore_times=ignore_times,
                                            log_ce_tables=args.log_ce_tables)
@@ -554,7 +556,7 @@ def train(args):
                                          batchnorm,
                                          args.num_devices,
                                          epoch,
-                                         curtail_epoch=args.curtail_epochs,
+                                         curtail_epoch=10,  # DEBUG: test只跑10个batch
                                          ignore_times=ignore_times,
                                          log_ce_tables=args.log_ce_tables)
             val_loss=test_loss
