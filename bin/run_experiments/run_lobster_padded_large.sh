@@ -93,15 +93,16 @@ nvidia-smi --list-gpus | head -4
 # Run Python with all arguments passed through
 # -u: unbuffered output for real-time logging
 # -B: don't write .pyc files
+# DEBUG: 小模型测试resume功能 (1024x12)
 python -u -B run_train.py \
         --C_init=trunc_standard_normal --prenorm=True --batchnorm=False --bidirectional=False \
-        --blocks=48 --per_gpu_bsz=2 --d_model=3072 --dataset=lobster-prediction --merging=padded \
+        --blocks=16 --per_gpu_bsz=2 --d_model=1024 --dataset=lobster-prediction --merging=padded \
         --dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/GOOG2016TO2021_encoded24' \
         --test_dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/JAN2023/tokenized_lobs5_v2_encoded24' \
         --data_mode='encoded' \
          --clip_eigs=True --activation_fn=half_glu1 \
-        --dt_global=False --epochs=20 --jax_seed=42 --lr_factor=1 --n_layers=32 \
-        --opt_config=standard --p_dropout=0.0 --ssm_lr_base=0.0001 --ssm_size_base=3072 \
+        --dt_global=False --epochs=5 --jax_seed=42 --lr_factor=1 --n_layers=12 \
+        --opt_config=standard --p_dropout=0.0 --ssm_lr_base=0.00003 --ssm_size_base=1024 \
         --warmup_end=1 --weight_decay=0.05 --msg_seq_len=500 \
         --use_book_data=True --use_simple_book=False --book_transform=True  \
         --masking=none \
@@ -112,9 +113,14 @@ python -u -B run_train.py \
         --shuffle_train=True \
         --debug_overfit=False \
         --lr_patience=3 \
-        --USE_WANDB=True \
-        --wandb_project=lobs5-3072x32-tok24 \
+        --USE_WANDB=False \
+        --wandb_project=lobs5-test-resume \
         --wandb_entity=kang-oxford
+
+        # ============= 原始大模型配置 (3072x32) =================
+        # --blocks=48 --d_model=3072 --n_layers=32 --ssm_size_base=3072 \
+        # --epochs=20 --USE_WANDB=True --wandb_project=lobs5-3072x32-tok24 \
+        # =========================================================
 
 
         # ============= Data choices =================

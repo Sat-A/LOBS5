@@ -59,10 +59,12 @@ def train(args):
         # Disable wandb on non-zero processes
         os.environ["WANDB_MODE"] = "disabled"
         # Create a dummy run object for checkpoint naming on non-zero processes
+        # Use SLURM_JOB_ID to ensure unique checkpoint directory per job
         class DummyRun:
             def __init__(self):
-                self.name = "offline"
-                self.id = "local"
+                job_id = os.environ.get("SLURM_JOB_ID", "local")
+                self.name = f"offline_{job_id}"
+                self.id = job_id
         run = DummyRun()
 
     ssm_size = args.ssm_size_base
