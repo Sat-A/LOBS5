@@ -129,3 +129,25 @@ python -u -B run_train.py \
         # --test_dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/JAN2023/tokenized_lobs5_v2_encoded24' \
         # --data_mode='encoded' \
         # ============= Data choices =================
+
+
+        # ============= Resume Training =================
+        # Intra-epoch checkpoint is automatically saved every segment (~1.8 hours).
+        # To resume training, simply re-run this script with the SAME wandb_project.
+        # The training will automatically:
+        #   1. Detect the latest checkpoint in checkpoints/{run_name}_{run_id}/
+        #   2. Restore model state and training progress
+        #   3. Recreate dataloader with saved seed (for random_offsets_train=True)
+        #   4. Skip already trained batches and continue from the next segment
+        #
+        # Resume scenarios:
+        #   - Mid-epoch (e.g., segment 2/5): Uses saved dataloader_seed, skips batches
+        #   - New epoch (e.g., segment 5/5 -> epoch+1): Generates fresh seed, no skip
+        #
+        # Note: Checkpoint directory is named after wandb run (e.g., ruby-aardvark-62_98nov1i7)
+        #       Make sure to use consistent wandb settings when resuming.
+        #
+        # Manual restore from specific checkpoint (optional):
+        # --restore='checkpoints/ruby-aardvark-62_98nov1i7' \
+        # --restore_step=37 \
+        # ============= Resume Training =================

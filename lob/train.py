@@ -99,11 +99,14 @@ def train(args):
     else:
         ValueError('Issue with mask function: logic for '+args.masking+' not implemented.')
 
+    # Track dataloader seed for checkpoint resume support
+    current_dataloader_seed = args.jax_seed
+
     (lobster_dataset, trainloader, valloader, testloader, aux_dataloaders,
         n_classes, seq_len, in_dim, book_seq_len, book_dim, train_size) = \
         create_lobster_prediction_dataset(
             args.dir_name,
-            seed=args.jax_seed,
+            seed=current_dataloader_seed,
             mask_fn=mask_fn,
             msg_seq_len=args.msg_seq_len,
             per_gpu_bsz=args.per_gpu_bsz,
@@ -258,6 +261,7 @@ def train(args):
     start_epoch = 0
     start_segment = 0
     resume_from_checkpoint = False
+    resume_dataloader_seed = None  # Will be set if resuming with random_offsets
 
     if ckpt_mgr is not None and ckpt_mgr.latest_step() is not None:
         latest_step = ckpt_mgr.latest_step()
@@ -273,16 +277,52 @@ def train(args):
                 restored_step = resume_info['global_step']
 
                 # If we finished all segments in this epoch, move to next epoch
+                need_new_epoch_seed = False
                 if start_segment >= resume_info['num_evals_per_epoch']:
                     start_epoch += 1
                     start_segment = 0
+                    need_new_epoch_seed = True  # Don't use saved seed - new epoch needs new seed
 
-                print(f"[*] Resuming from: epoch {start_epoch}, segment {start_segment}, global_step {restored_step}")
+                # Get dataloader_seed if saved (for random_offsets support)
+                # But only use it if we're resuming mid-epoch (not starting a new epoch)
+                if 'dataloader_seed' in resume_info and not need_new_epoch_seed:
+                    resume_dataloader_seed = resume_info['dataloader_seed']
+                    print(f"[*] Resuming from: epoch {start_epoch}, segment {start_segment}, global_step {restored_step}, dataloader_seed {resume_dataloader_seed}")
+                else:
+                    if need_new_epoch_seed:
+                        print(f"[*] Resuming from: epoch {start_epoch}, segment {start_segment}, global_step {restored_step} (new epoch, will use fresh seed)")
+                    else:
+                        print(f"[*] Resuming from: epoch {start_epoch}, segment {start_segment}, global_step {restored_step}")
 
                 # Restore model state
                 state = restored['model']
                 step = restored_step
                 resume_from_checkpoint = True
+
+                # Handle dataloader recreation for random_offsets_train
+                if args.random_offsets_train:
+                    if resume_dataloader_seed is not None:
+                        # Resuming mid-epoch: use saved seed to ensure correct data order for skip-batches
+                        print(f"[*] Recreating trainloader with saved seed {resume_dataloader_seed}...")
+                        current_dataloader_seed = resume_dataloader_seed
+                    else:
+                        # Starting new epoch: generate fresh random seed
+                        # (need_new_epoch_seed was True, so we didn't load the old seed)
+                        current_dataloader_seed = int(random.randint(train_rng, (1,), 0, 100000)[0])
+                        print(f"[*] New epoch: generating fresh dataloader seed {current_dataloader_seed}...")
+
+                    del trainloader
+                    trainloader = create_lobster_train_loader(
+                        lobster_dataset,
+                        current_dataloader_seed,
+                        args.effective_bsz,
+                        num_workers=args.n_data_workers,
+                        reset_train_offsets=args.random_offsets_train,
+                        shuffle=args.shuffle_train,
+                        use_distributed_sampler=args.is_distributed,
+                        process_rank=args.process_index,
+                        process_count=args.process_count)
+                    print(f"[*] Trainloader recreated with seed {current_dataloader_seed}")
 
                 print(f"[*] Model state restored successfully")
             else:
@@ -423,6 +463,7 @@ def train(args):
                         'global_step': step,
                         'num_evals_per_epoch': num_evals_per_epoch,
                         'eval_interval': eval_interval,
+                        'dataloader_seed': current_dataloader_seed,  # For random_offsets resume
                     },
                     'metrics': {
                         'train_loss': float(train_loss),
@@ -431,18 +472,20 @@ def train(args):
                 # Use a unique step that encodes both epoch and segment
                 ckpt_step = epoch * num_evals_per_epoch + eval_idx
                 save_checkpoint(ckpt_mgr, intra_ckpt, ckpt_step)
-                print(f"[*] Intra-epoch checkpoint saved: epoch {epoch}, segment {eval_idx}, step {step}")
+                print(f"[*] Intra-epoch checkpoint saved: epoch {epoch}, segment {eval_idx}, step {step}, dataloader_seed {current_dataloader_seed}")
 
         # End of intra-epoch loop
         print(f"\n[*] Epoch {epoch + 1} Training Complete - All {num_evals_per_epoch} segments done")
 
         if args.random_offsets_train:
-            # reinit training loader, so that sequences are initialised with
+            # reinit training loader, so that sequences are initialised with different offsets
+            # Generate new random seed for next epoch and update current_dataloader_seed for checkpoint
+            current_dataloader_seed = int(random.randint(skey, (1,), 0, 100000)[0])
+            print(f"[*] Next epoch dataloader_seed: {current_dataloader_seed}")
             del trainloader
-            # # different offsets
             trainloader = create_lobster_train_loader(
                 lobster_dataset,
-                int(random.randint(skey, (1,), 0, 100000)[0]),
+                current_dataloader_seed,
                 args.effective_bsz,
                 num_workers=args.n_data_workers,
                 reset_train_offsets=args.random_offsets_train,
