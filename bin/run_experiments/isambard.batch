@@ -14,7 +14,7 @@
 # ============================================
 # Usage:
 #   Single-node (4 GPUs):   sbatch isambard.batch
-#   Multi-node (8 GPUs):    sbatch --nodes=2 --time=02:00:00 isambard.batch
+#   Multi-node  (8 GPUs):    sbatch --nodes=2 --time=02:00:00 isambard.batch
 # ============================================
 
 echo "============================================"
