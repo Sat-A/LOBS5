@@ -311,19 +311,16 @@ def create_train_state(model_cls,
         state = TrainState.create(apply_fn=model.apply, params=params, tx=tx, batch_stats=batch_stats)
     else:
         state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
-    
-    # BF16 Mixed Precision: Controlled by environment variable
-    # Set USE_BF16=0 to disable BF16, USE_BF16=1 (default) to enable
+
+    # BF16 Mixed Precision: 正确实现
+    # Master weights (params) 保持 FP32，用于 optimizer 更新
+    # BF16 计算通过模型层的 dtype 参数控制 (在 forward pass 中)
+    # 这样 optimizer states (m, v) 也保持 FP32，避免 NaN
     use_bf16 = os.environ.get('USE_BF16', '1') == '1'
     if use_bf16:
-        params_bf16 = jax.tree_util.tree_map(
-            lambda x: x.astype(np.bfloat16) if x.dtype == np.float32 else x,
-            state.params
-        )
-        state = state.replace(params=params_bf16)
-        print(f"[*] Parameters converted to BF16 for mixed precision training")
+        print(f"[*] BF16 Mixed Precision enabled: params=FP32 (master), compute=BF16 (via model dtype)")
     else:
-        print(f"[*] Parameters kept in FP32 (BF16 disabled via USE_BF16=0)")
+        print(f"[*] Full FP32 training (BF16 disabled via USE_BF16=0)")
 
     # keep copy of state on each device
     print(state.params['message_encoder']['encoder']['embedding'].shape)

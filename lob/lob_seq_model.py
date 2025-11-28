@@ -1,6 +1,7 @@
 import math
+import os
 from functools import partial
-from typing import Tuple
+from typing import Tuple, Any
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
@@ -157,11 +158,19 @@ class LobBookModel(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
+    dtype: Any = None  # 计算 dtype，由 USE_BF16 环境变量控制
 
     def setup(self):
         """
         Initializes ...
         """
+        # 确定计算 dtype
+        if self.dtype is None:
+            use_bf16 = os.environ.get('USE_BF16', '1') == '1'
+            compute_dtype = jnp.bfloat16 if use_bf16 else jnp.float32
+        else:
+            compute_dtype = self.dtype
+
         self.pre_layers = tuple(
             SequenceLayer(
                 # fix ssm init to correct shape (different than other layers)
@@ -174,6 +183,7 @@ class LobBookModel(nn.Module):
                 batchnorm=self.batchnorm,
                 bn_momentum=self.bn_momentum,
                 step_rescale=self.step_rescale,
+                dtype=compute_dtype,
             ) for _ in range(self.n_pre_layers))
         # GPT风格初始化: stddev = 0.02 / sqrt(n_layers) 防止梯度爆炸
         n_total_layers = self.n_pre_layers + self.n_post_layers
@@ -183,7 +193,7 @@ class LobBookModel(nn.Module):
         # kaiming_init = nn.initializers.variance_scaling(
         #     scale=2.0, mode='fan_in', distribution='truncated_normal'
         # )
-        self.projection = nn.Dense(self.d_model, kernel_init=gpt_init)  # project to d_model
+        self.projection = nn.Dense(self.d_model, kernel_init=gpt_init, dtype=compute_dtype)  # project to d_model
         self.post_layers = tuple(
             SequenceLayer(
                 ssm=self.ssm,
@@ -195,6 +205,7 @@ class LobBookModel(nn.Module):
                 batchnorm=self.batchnorm,
                 bn_momentum=self.bn_momentum,
                 step_rescale=self.step_rescale,
+                dtype=compute_dtype,
             )
             for _ in range(self.n_post_layers)
         )
@@ -264,11 +275,23 @@ class FullLobPredModel(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
+    dtype: Any = None  # 计算 dtype，由 USE_BF16 环境变量控制
 
     def setup(self):
         """
         Initializes the S5 stacked encoder and a linear decoder.
         """
+        # 确定计算 dtype
+        if self.dtype is None:
+            use_bf16 = os.environ.get('USE_BF16', '1') == '1'
+            compute_dtype = jnp.bfloat16 if use_bf16 else jnp.float32
+        else:
+            compute_dtype = self.dtype
+
+        # GPT风格初始化: stddev = 0.02 / sqrt(n_layers) 防止梯度爆炸
+        n_total_layers = self.n_message_layers + self.n_book_pre_layers + self.n_book_post_layers + self.n_fused_layers
+        gpt_init = nn.initializers.normal(stddev=0.02 / math.sqrt(n_total_layers))
+
         self.message_encoder = StackedEncoderModel(
             ssm=self.ssm,
             d_model=self.d_model,
@@ -282,9 +305,10 @@ class FullLobPredModel(nn.Module):
             step_rescale=self.step_rescale,
             use_embed_layer=True,
             vocab_size=self.d_output,
+            dtype=compute_dtype,
         )
         # applied to transposed message output to get seq len for fusion
-        self.message_out_proj = nn.Dense(self.d_model)  
+        self.message_out_proj = nn.Dense(self.d_model, kernel_init=gpt_init, dtype=compute_dtype)
         self.book_encoder = LobBookModel(
             ssm=self.ssm,
             d_book=self.d_book,
@@ -298,9 +322,10 @@ class FullLobPredModel(nn.Module):
             batchnorm=self.batchnorm,
             bn_momentum=self.bn_momentum,
             step_rescale=self.step_rescale,
+            dtype=compute_dtype,
         )
         # applied to transposed book output to get seq len for fusion
-        self.book_out_proj = nn.Dense(self.d_model)
+        self.book_out_proj = nn.Dense(self.d_model, kernel_init=gpt_init, dtype=compute_dtype)
         self.fused_s5 = StackedEncoderModel(
             ssm=self.ssm,
             d_model=self.d_model,
@@ -312,8 +337,10 @@ class FullLobPredModel(nn.Module):
             batchnorm=self.batchnorm,
             bn_momentum=self.bn_momentum,
             step_rescale=self.step_rescale,
+            dtype=compute_dtype,
         )
-        self.decoder = nn.Dense(self.d_output)
+        # decoder 输出 logits，需要 cast 回 FP32 做 softmax，所以这里不用 dtype
+        self.decoder = nn.Dense(self.d_output, kernel_init=gpt_init)
 
     def __call__(self, x_m, x_b, message_integration_timesteps, book_integration_timesteps):
         """
@@ -377,11 +404,19 @@ class PaddedLobPredModel(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
+    dtype: Any = None  # 计算 dtype，由 USE_BF16 环境变量控制
 
     def setup(self):
         """
         Initializes the S5 stacked encoder and a linear decoder.
         """
+        # 确定计算 dtype
+        if self.dtype is None:
+            use_bf16 = os.environ.get('USE_BF16', '1') == '1'
+            compute_dtype = jnp.bfloat16 if use_bf16 else jnp.float32
+        else:
+            compute_dtype = self.dtype
+
         # nn.checkpoint()
         self.message_encoder = StackedEncoderModel(
             ssm=self.ssm,
@@ -396,10 +431,11 @@ class PaddedLobPredModel(nn.Module):
             step_rescale=self.step_rescale,
             use_embed_layer=True,
             vocab_size=self.d_output,
+            dtype=compute_dtype,
         )
 
         # applied to transposed message output to get seq len for fusion
-        #self.message_out_proj = nn.Dense(self.d_model)  
+        #self.message_out_proj = nn.Dense(self.d_model)
         # nn.checkpoint()
         self.book_encoder = LobBookModel(
             ssm=self.ssm,
@@ -414,6 +450,7 @@ class PaddedLobPredModel(nn.Module):
             batchnorm=self.batchnorm,
             bn_momentum=self.bn_momentum,
             step_rescale=self.step_rescale,
+            dtype=compute_dtype,
         )
 
 
@@ -432,8 +469,13 @@ class PaddedLobPredModel(nn.Module):
             batchnorm=self.batchnorm,
             bn_momentum=self.bn_momentum,
             step_rescale=self.step_rescale,
+            dtype=compute_dtype,
         )
-        self.decoder = nn.Dense(self.d_output)
+        # GPT风格初始化: stddev = 0.02 / sqrt(n_layers) 防止梯度爆炸
+        n_total_layers = self.n_message_layers + self.n_book_pre_layers + self.n_book_post_layers + self.n_fused_layers
+        gpt_init = nn.initializers.normal(stddev=0.02 / math.sqrt(n_total_layers))
+        # decoder 输出 logits，需要 cast 回 FP32 做 softmax，所以这里不用 dtype
+        self.decoder = nn.Dense(self.d_output, kernel_init=gpt_init)
 
     def __call__(self, x_m, x_b, message_integration_timesteps, book_integration_timesteps):
         """
@@ -441,7 +483,7 @@ class PaddedLobPredModel(nn.Module):
         (L_m x d_input, L_b x [P+1]) input sequence tuple,
         combining message and book inputs.
         Args:
-             x_m: message input sequence (L_m x d_input, 
+             x_m: message input sequence (L_m x d_input,
              x_b: book state (volume series) (L_b x [P+1])
         Returns:
             output (float32): (d_output)
