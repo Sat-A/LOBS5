@@ -124,7 +124,9 @@ python -u -B run_train.py \
         --lr_patience=3 \
         --USE_WANDB=False \
         --wandb_project=lobs5-test-resume \
-        --wandb_entity=kang-oxford
+        --wandb_entity=kang-oxford \
+        --restore='checkpoints/offline_1636101_1636101' \
+        --restore_step=0 \
 
 
         # --dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/GOOG_GOOGL_2016TO2021_24tok_encoded/GOOGL' \
