@@ -34,10 +34,12 @@ def deduplicate_trainstate(
         state: TrainState,
     ) -> TrainState:
     """
+    Extract single copy of replicated state and place on local GPU 0.
+    Uses jax.local_devices() for multi-node compatibility.
     """
     return jax.device_put(
         jax.tree.map(lambda x: x[0], state),
-        device=jax.devices('gpu')[0]
+        device=jax.local_devices()[0]
     )
 
 def load_args_from_checkpoint(
@@ -118,37 +120,64 @@ def load_metadata(
 def load_checkpoint(
         state: TrainState,
         path: str,
-        # config_dict: dict,
         step: Optional[int] = None,
         train: bool = True,
     ) -> dict[str, Any]:
+    """
+    Load checkpoint with JAX 0.7.x compatibility.
 
+    Uses PyTreeRestore() without template to avoid None vs EmptyState mismatch,
+    then reconstructs opt_state using tree_unflatten.
+    """
     mngr = ocp.CheckpointManager(
         os.path.abspath(path),
         item_names=('state', 'metadata'),
         options=ocp.CheckpointManagerOptions(),
-        # metadata=ckpt['config']
     )
 
     if step is None:
         step = mngr.latest_step()
 
+    # Use PyTreeRestore() WITHOUT template to avoid JAX 0.7.x tree structure mismatch
+    # (None vs EmptyState issue in opt_state)
     loaded = mngr.restore(
         step,
         args=ocp.args.Composite(
-            state=ocp.args.StandardRestore(
-                # only stored trainstate from a single device (as they are all the same)
-                deduplicate_trainstate(state)
-            ),
+            state=ocp.args.PyTreeRestore(),  # No template - returns nested dict
             metadata=ocp.args.JsonRestore()
         )
     )
+
+    # Extract loaded state components
+    loaded_state = loaded['state']
+    loaded_params = loaded_state['params']
+    loaded_opt_state = loaded_state['opt_state']
+    loaded_step = loaded_state['step']
+
+    # Get current state structure as template
+    template = deduplicate_trainstate(state)
+    current_opt_state = template.opt_state
+
+    # Reconstruct opt_state: take leaf values from loaded, structure from current
+    # This bypasses the None vs EmptyState mismatch
+    restored_opt_state = jax.tree_util.tree_unflatten(
+        jax.tree_util.tree_structure(current_opt_state),
+        jax.tree_util.tree_leaves(loaded_opt_state)
+    )
+
+    # Build complete restored TrainState
+    restored_state = template.replace(
+        params=loaded_params,
+        opt_state=restored_opt_state,
+        step=loaded_step
+    )
+
     ckpt = loaded['metadata']
-    # copy train state back to all devices
+    # Copy train state back to all devices
     if train:
-        ckpt['model'] = jax_utils.replicate(loaded['state'])
+        ckpt['model'] = jax_utils.replicate(restored_state)
     else:
-        ckpt['model'] = loaded['state']
+        ckpt['model'] = restored_state
     return ckpt
 
 
@@ -303,7 +332,7 @@ def init_train_state(
         in_dim=1, # in_dim,
         book_dim=book_dim,
         book_seq_len=book_seq_len,
-        bsz=args.bsz,
+        bsz=args.effective_bsz,
         seq_len=seq_len,
         weight_decay=args.weight_decay,
         batchnorm=args.batchnorm,

@@ -10,6 +10,8 @@ import optax
 from typing import Any, Dict, Optional, Tuple, Union
 from lob.encoding import Message_Tokenizer
 import sys
+import json
+import os
 
 # from lob.lob_seq_model import LobPredModel
 
@@ -166,8 +168,9 @@ def create_train_state(model_cls,
 
     model = model_cls(training=True)
     init_rng, dropout_rng = jax.random.split(rng, num=2)
-    
-    jax.debug.print("Dummy input shapes (msg,book) ({}, \n {})",dummy_input[0].shape,dummy_input[1].shape)
+
+    # jax.debug.print("Dummy input shapes (msg,book) ({}, \n {})",dummy_input[0].shape,dummy_input[1].shape)
+    print(f"[DEBUG] Dummy input shapes (msg,book): {dummy_input[0].shape}, {dummy_input[1].shape}")
     #RNN mode and initialisation needs to go in here if we need it. 
 
     variables = model.init({"params": init_rng,
@@ -308,15 +311,16 @@ def create_train_state(model_cls,
         state = TrainState.create(apply_fn=model.apply, params=params, tx=tx, batch_stats=batch_stats)
     else:
         state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
-    
-    # BF16 Mixed Precision: Convert parameters to BF16 once at initialization
-    # This avoids repeated tree_map in every forward pass
-    params_bf16 = jax.tree_util.tree_map(
-        lambda x: x.astype(np.bfloat16) if x.dtype == np.float32 else x,
-        state.params
-    )
-    state = state.replace(params=params_bf16)
-    print(f"[*] Parameters converted to BF16 for mixed precision training")
+
+    # BF16 Mixed Precision: 正确实现
+    # Master weights (params) 保持 FP32，用于 optimizer 更新
+    # BF16 计算通过模型层的 dtype 参数控制 (在 forward pass 中)
+    # 这样 optimizer states (m, v) 也保持 FP32，避免 NaN
+    use_bf16 = os.environ.get('USE_BF16', '1') == '1'
+    if use_bf16:
+        print(f"[*] BF16 Mixed Precision enabled: params=FP32 (master), compute=BF16 (via model dtype)")
+    else:
+        print(f"[*] Full FP32 training (BF16 disabled via USE_BF16=0)")
 
     # keep copy of state on each device
     print(state.params['message_encoder']['encoder']['embedding'].shape)
@@ -487,16 +491,25 @@ def train_epoch(
         epoch,
         ignore_times,
         log_ce_tables,
+        use_wandb=False,
+        process_index=0,
+        max_batches=None,  # New: limit number of batches to train (for intra-epoch evaluation)
     ):
 
     """
     Training function for an epoch that loops over batches.
+
+    Args:
+        max_batches: If provided, stop training after processing this many batches.
+                     Used for intra-epoch evaluation to train only a segment of the epoch.
     """
     # Store Metrics
     batch_losses = []
-    cross_entropies= [] #list of 1xNTok losses 
+    cross_entropies= [] #list of 1xNTok losses
 
     decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min = lr_params
+    batches_processed = 0  # Track how many batches we've processed in this call
+
     #with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
     for batch_idx, batch in enumerate(tqdm(trainloader)):
         # print(f"train_epoch: Epoch {epoch} - Batch {batch_idx} / {len(trainloader)}")
@@ -547,11 +560,35 @@ def train_epoch(
             batch_losses.append(loss[0])
             if log_ce_tables:
                 cross_entropies.append(ce)
+
+            # DISABLED: Per-step wandb logging causes ~10% slowdown even at 1000-step intervals
+            # Only using per-epoch logging in train.py instead
+            # if use_wandb and process_index == 0 and step % 1000 == 0:
+            #     import wandb
+            #     current_lr = decay_function(step, lr, end_step, lr_min)
+            #     wandb.log({
+            #         "train/loss_step": float(loss[0]),
+            #         "train/step": step,
+            #         "train/epoch": epoch,
+            #         "train/lr": float(current_lr),
+            #     })
+
             lr_params = (decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min)
             state, step = update_learning_rate_per_step(lr_params, state)
+
+            # Increment batch counter
+            batches_processed += 1
+
             if (step>20) & (step<=21) & debug_profiler:
                 jax.profiler.stop_trace()
                 break
+
+            # Check max_batches limit (for intra-epoch evaluation)
+            if (max_batches is not None) and (batches_processed >= max_batches):
+                print(f"[train_epoch] Reached max_batches={max_batches}, stopping segment")
+                break
+
+            # Original curtail_epochs check
             if (curtail_epochs is not None) and (batch_idx>=curtail_epochs):
                 print("Ending epoch early due to curtail_epochs being ",curtail_epochs)
                 break
@@ -615,6 +652,14 @@ def train_step(
         # BF16 Mixed Precision: params are already BF16 from initialization
         # No need for tree_map here - direct use saves 30-40% overhead
 
+        # ===== NaN检测点1: 输入参数 =====
+        params_has_nan = jax.tree_util.tree_reduce(
+            lambda a, b: a | b,
+            jax.tree_util.tree_map(lambda x: np.any(np.isnan(x)), params),
+            False
+        )
+        jax.debug.print("[NaN Check 1] Params has NaN: {}", params_has_nan)
+
         if batchnorm:
             logits, mod_vars = state.apply_fn(
                 {"params": params, "batch_stats": state.batch_stats},
@@ -631,6 +676,10 @@ def train_step(
                 mutable=["intermediates"],
                 method='__call_ar__'
             )
+
+        # ===== NaN检测点2: Forward输出 =====
+        logits_has_nan = np.any(np.isnan(logits))
+        jax.debug.print("[NaN Check 2] Logits has NaN: {}, dtype: {}", logits_has_nan, logits.dtype)
 
         # BF16 Mixed Precision: Cast logits back to FP32 for loss computation
         logits = logits.astype(np.float32)
@@ -652,12 +701,73 @@ def train_step(
         # jax.debug.print("Shape of CE: {}", ce.shape)
         # average cross-ent loss
         loss = np.mean(ce)
-        # jax.debug.print("Shape of loss: {}", loss.shape)
+
+        # ===== NaN检测点3: Loss =====
+        loss_has_nan = np.isnan(loss)
+        jax.debug.print("[NaN Check 3] Loss has NaN: {}, value: {:.6f}", loss_has_nan, loss)
+
         return loss, (mod_vars, logits,ce)
 
     (loss, (mod_vars, logits,ce)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
 
+    # ===== NaN检测点4: 梯度 =====
+    grads_has_nan = jax.tree_util.tree_reduce(
+        lambda a, b: a | b,
+        jax.tree_util.tree_map(lambda x: np.any(np.isnan(x)), grads),
+        False
+    )
+    jax.debug.print("[NaN Check 4] Grads has NaN: {}", grads_has_nan)
 
+    # ===== NaN检测点5: 梯度范数 =====
+    grad_norm = np.sqrt(jax.tree_util.tree_reduce(
+        lambda a, b: a + b,
+        jax.tree_util.tree_map(lambda x: np.sum(x.astype(np.float32) ** 2), grads),
+        0.0
+    ))
+    jax.debug.print("[NaN Check 5] Grad norm: {:.6f}", grad_norm)
+
+    # ===== 分层梯度统计 (写入JSON文件) =====
+    # 计算每个叶子节点的梯度范数
+    def compute_leaf_norm(grad):
+        return np.sqrt(np.sum(grad.astype(np.float32) ** 2))
+
+    leaf_norms = jax.tree_util.tree_map(compute_leaf_norm, grads)
+    leaf_norms_with_path = jax.tree_util.tree_leaves_with_path(leaf_norms)
+
+    # 构建记录并写入文件
+    def write_grad_stats(step_val, global_norm_val, leaf_norms_with_path_val):
+        """在host端写入梯度统计到JSON文件"""
+        # 从环境变量获取精度模式
+        precision = os.environ.get('GRAD_STATS_PRECISION', 'bf16')
+
+        # 转换为dict: path -> norm
+        layer_norms_dict = {}
+        for path, norm in leaf_norms_with_path_val:
+            path_str = '/'.join(str(k.key) for k in path)
+            layer_norms_dict[path_str] = float(norm)
+
+        record = {
+            'step': int(step_val),
+            'precision': precision,
+            'global_norm': float(global_norm_val),
+            'layer_norms': layer_norms_dict,
+        }
+
+        filepath = f"grad_stats_{precision}.jsonl"
+        with open(filepath, 'a') as f:
+            f.write(json.dumps(record) + '\n')
+
+    # 使用callback在host端执行文件写入
+    jax.debug.callback(write_grad_stats, state.step, grad_norm, leaf_norms_with_path)
+
+    # # ===== 梯度裁剪 (Gradient Clipping) =====
+    # # 使用全局范数裁剪
+    # # 注: GPT初始化后梯度范数约4M，使用10000保持合理有效学习率
+    # MAX_GRAD_NORM = 10000.0
+    # clip_factor = np.minimum(1.0, MAX_GRAD_NORM / (grad_norm + 1e-6))
+    # grads = jax.tree_util.tree_map(lambda g: g * clip_factor, grads)
+    # jax.debug.print("[Grad Clip] clip_factor: {:.6f}, clipped_norm: {:.6f}",
+    #                 clip_factor, grad_norm * clip_factor)
 
     # UPDATE
     # calculate means over device dimension (first)
@@ -670,6 +780,14 @@ def train_step(
         state = state.apply_gradients(grads=grads, batch_stats=mod_vars["batch_stats"])
     else:
         state = state.apply_gradients(grads=grads)
+
+    # ===== NaN检测点6: 更新后参数 =====
+    new_params_has_nan = jax.tree_util.tree_reduce(
+        lambda a, b: a | b,
+        jax.tree_util.tree_map(lambda x: np.any(np.isnan(x)), state.params),
+        False
+    )
+    jax.debug.print("[NaN Check 6] Updated params has NaN: {}", new_params_has_nan)
 
     #return loss, mod_vars, grads, state
     return state, loss, ce, logits

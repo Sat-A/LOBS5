@@ -1,5 +1,6 @@
 from flax import linen as nn
 import jax
+from typing import Any
 
 
 class SequenceLayer(nn.Module):
@@ -18,6 +19,7 @@ class SequenceLayer(nn.Module):
             step_rescale  (float32):  allows for uniformly changing the timescale parameter,
                                     e.g. after training on a different resolution for
                                     the speech commands benchmark
+            dtype       (Any):      computation dtype for Dense layers (bfloat16 or float32)
     """
     ssm: nn.Module
     dropout: float
@@ -28,23 +30,29 @@ class SequenceLayer(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.90
     step_rescale: float = 1.0
+    dtype: Any = jax.numpy.float32  # 默认 FP32，由上层传入 BF16
 
     def setup(self):
         """Initializes the ssm, batch/layer norm and dropout
         """
         self.seq = self.ssm(step_rescale=self.step_rescale)
 
+        # GPT风格初始化: stddev=0.02 防止梯度爆炸
+        gpt_init = nn.initializers.normal(stddev=0.02)
+
+        # Dense 层使用 dtype 控制计算精度，param_dtype 默认 FP32 (master weights)
         if self.activation in ["full_glu"]:
-            self.out1 = nn.Dense(self.d_model)
-            self.out2 = nn.Dense(self.d_model)
+            self.out1 = nn.Dense(self.d_model, kernel_init=gpt_init, dtype=self.dtype)
+            self.out2 = nn.Dense(self.d_model, kernel_init=gpt_init, dtype=self.dtype)
         elif self.activation in ["half_glu1", "half_glu2"]:
-            self.out2 = nn.Dense(self.d_model)
+            self.out2 = nn.Dense(self.d_model, kernel_init=gpt_init, dtype=self.dtype)
 
         if self.batchnorm:
             self.norm = nn.BatchNorm(use_running_average=not self.training,
-                                     momentum=self.bn_momentum, axis_name='batch')
+                                     momentum=self.bn_momentum, axis_name='batch',
+                                     dtype=self.dtype)
         else:
-            self.norm = nn.LayerNorm()
+            self.norm = nn.LayerNorm(dtype=self.dtype)
 
         self.drop = nn.Dropout(
             self.dropout,

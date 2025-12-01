@@ -1,6 +1,9 @@
+import math
+import os
 import jax
 import jax.numpy as np
 from flax import linen as nn
+from typing import Any
 from .layers import SequenceLayer
 
 
@@ -20,6 +23,7 @@ class StackedEncoderModel(nn.Module):
             step_rescale  (float32):  allows for uniformly changing the timescale parameter,
                                     e.g. after training on a different resolution for
                                     the speech commands benchmark
+            dtype       (Any):      computation dtype (bfloat16 for mixed precision, float32 otherwise)
     """
     ssm: nn.Module
     d_model: int
@@ -33,17 +37,34 @@ class StackedEncoderModel(nn.Module):
     step_rescale: float = 1.0
     use_embed_layer: bool = False
     vocab_size: int = -1  # only used if use_encode_layer is True
+    dtype: Any = None  # None means use default (controlled by USE_BF16 env var)
 
     def setup(self):
         """
         Initializes a linear encoder and the stack of S5 layers.
         """
-        if self.use_embed_layer:
-            self.encoder = nn.Embed(self.vocab_size, self.d_model)
+        # 确定计算 dtype：如果未指定，根据 USE_BF16 环境变量决定
+        if self.dtype is None:
+            use_bf16 = os.environ.get('USE_BF16', '1') == '1'
+            compute_dtype = jax.numpy.bfloat16 if use_bf16 else jax.numpy.float32
         else:
-            self.encoder = nn.Dense(self.d_model)
+            compute_dtype = self.dtype
 
-        #NOTE:  popjaxrl S5 doesn't have an encoding layer, tbd if this makes a differnce. 
+        # GPT风格初始化: stddev = 0.02 / sqrt(n_layers) 防止梯度爆炸
+        gpt_init = nn.initializers.normal(stddev=0.02 / math.sqrt(self.n_layers))
+
+        # Kaiming He初始化: variance = 2/fan_in, 适合GELU激活
+        # kaiming_init = nn.initializers.variance_scaling(
+        #     scale=2.0, mode='fan_in', distribution='truncated_normal'
+        # )
+
+        # Dense/Embed: param_dtype=float32 (master weights), dtype=compute_dtype (BF16 计算)
+        if self.use_embed_layer:
+            self.encoder = nn.Embed(self.vocab_size, self.d_model, dtype=compute_dtype)
+        else:
+            self.encoder = nn.Dense(self.d_model, kernel_init=gpt_init, dtype=compute_dtype)
+
+        #NOTE:  popjaxrl S5 doesn't have an encoding layer, tbd if this makes a differnce.
 
         self.layers = [
             SequenceLayer(
@@ -56,6 +77,7 @@ class StackedEncoderModel(nn.Module):
                 batchnorm=self.batchnorm,
                 bn_momentum=self.bn_momentum,
                 step_rescale=self.step_rescale,
+                dtype=compute_dtype,
             )
             for _ in range(self.n_layers)
         ]
@@ -67,16 +89,13 @@ class StackedEncoderModel(nn.Module):
         Args:
              x (int32/float32): input sequence (L, d_input) - tokens or floats
         Returns:
-            output sequence (bfloat16): (L, d_model)
+            output sequence: (L, d_model) - dtype controlled by self.dtype
         """
         #jax.debug.print("Before encoder in StackedEncoderModel {}",x.shape)
         #jax.debug.print("call x_m[0:5] before msg_enc.encoder : {}",x[0:5][0])
 
-        # Embedding/Dense outputs FP32 by default
+        # encoder 已通过 dtype 参数控制计算精度，无需手动 cast
         x = self.encoder(x)
-
-        # BF16 Mixed Precision: Cast to BF16 for subsequent layers
-        x = x.astype(jax.numpy.bfloat16)
 
         #jax.debug.print("call x_m[0:5] after msg_enc.encoder : {}",x[0:5][0])
 
@@ -87,7 +106,7 @@ class StackedEncoderModel(nn.Module):
 
         #jax.debug.print("call x_m[0:5] after msg_enc.layers : {}",x[0:5][0])
 
-        return x  # Returns BF16
+        return x
     
 
     def __call_rnn__(self, hidden, x,d, integration_timesteps):
@@ -195,7 +214,9 @@ class ClassificationModel(nn.Module):
                             bn_momentum=self.bn_momentum,
                             step_rescale=self.step_rescale,
                                         )
-        self.decoder = nn.Dense(self.d_output)
+        # GPT风格初始化: stddev = 0.02 / sqrt(n_layers) 防止梯度爆炸
+        gpt_init = nn.initializers.normal(stddev=0.02 / math.sqrt(self.n_layers))
+        self.decoder = nn.Dense(self.d_output, kernel_init=gpt_init)
 
     def __call__(self, x, integration_timesteps):
         """
