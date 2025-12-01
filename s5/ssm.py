@@ -8,47 +8,47 @@ from .ssm_init import init_CV, init_VinvB, init_log_steps, trunc_standard_normal
 
 
 # Discretization functions
-# def discretize_bilinear(Lambda, B_tilde, Delta):
-#     """ Discretize a diagonalized, continuous-time linear SSM
-#         using bilinear transform method.
-#         Args:
-#             Lambda (complex64): diagonal state matrix              (P,)
-#             B_tilde (complex64): input matrix                      (P, H)
-#             Delta (float32): discretization step sizes             (P,)
-#         Returns:
-#             discretized Lambda_bar (complex64), B_bar (complex64)  (P,), (P,H)
-#     """
-#     Identity = np.ones(Lambda.shape[0])
+def discretize_bilinear(Lambda, B_tilde, Delta):Threepo
+    """ Discretize a diagonalized, continuous-time linear SSM
+        using bilinear transform method.
+        Args:
+            Lambda (complex64): diagonal state matrix              (P,)
+            B_tilde (complex64): input matrix                      (P, H)
+            Delta (float32): discretization step sizes             (P,)
+        Returns:
+            discretized Lambda_bar (complex64), B_bar (complex64)  (P,), (P,H)
+    """
+    Identity = np.ones(Lambda.shape[0])
 
-#     BL = 1 / (Identity - (Delta / 2.0) * Lambda)
-#     Lambda_bar = BL * (Identity + (Delta / 2.0) * Lambda)
-#     B_bar = (BL * Delta)[..., None] * B_tilde
-#     return Lambda_bar, B_bar
+    BL = 1 / (Identity - (Delta / 2.0) * Lambda)
+    Lambda_bar = BL * (Identity + (Delta / 2.0) * Lambda)
+    B_bar = (BL * Delta)[..., None] * B_tilde
+    return Lambda_bar, B_bar
 
-
-# def discretize_zoh(Lambda, B_tilde, Delta):
-#     """ Discretize a diagonalized, continuous-time linear SSM
-#         using zero-order hold method.
-#         Args:
-#             Lambda (complex64): diagonal state matrix              (P,)
-#             B_tilde (complex64): input matrix                      (P, H)
-#             Delta (float32): discretization step sizes             (P,)
-#         Returns:
-#             discretized Lambda_bar (complex64), B_bar (complex64)  (P,), (P,H)
-#     """
-#     Identity = np.ones(Lambda.shape[0])
-#     Lambda_bar = np.exp(Lambda * Delta)
-#     B_bar = (1/Lambda * (Lambda_bar-Identity))[..., None] * B_tilde
-#     return Lambda_bar, B_bar
-
-def discretize_bilinear(Lambda, B_tilde, Delta):
-    # Just return inputs. 
-    # The compiler sees them as "used" because they are returned.
-    return Lambda, B_tilde
 
 def discretize_zoh(Lambda, B_tilde, Delta):
-    # Just return inputs.
-    return Lambda, B_tilde
+    """ Discretize a diagonalized, continuous-time linear SSM
+        using zero-order hold method.
+        Args:
+            Lambda (complex64): diagonal state matrix              (P,)
+            B_tilde (complex64): input matrix                      (P, H)
+            Delta (float32): discretization step sizes             (P,)
+        Returns:
+            discretized Lambda_bar (complex64), B_bar (complex64)  (P,), (P,H)
+    """
+    Identity = np.ones(Lambda.shape[0])
+    Lambda_bar = np.exp(Lambda * Delta)
+    B_bar = (1/Lambda * (Lambda_bar-Identity))[..., None] * B_tilde
+    return Lambda_bar, B_bar
+
+# def discretize_bilinear(Lambda, B_tilde, Delta):
+#     # Just return inputs. 
+#     # The compiler sees them as "used" because they are returned.
+#     return Lambda, B_tilde
+
+# def discretize_zoh(Lambda, B_tilde, Delta):
+#     # Just return inputs.
+#     return Lambda, B_tilde
     
 # Parallel scan operations
 @jax.vmap
@@ -83,156 +83,156 @@ def binary_operator_reset(q_i, q_j):
     )
 
 
-# def apply_ssm(Lambda_bar, B_bar, C_tilde, input_sequence, conj_sym, bidirectional):
-#     """ Compute the LxH output of discretized SSM given an LxH input.
-#         Args:
-#             Lambda_bar (complex64): discretized diagonal state matrix    (P,)
-#             B_bar      (complex64): discretized input matrix             (P, H)
-#             C_tilde    (complex64): output matrix                        (H, P)
-#             input_sequence (float32): input sequence of features         (L, H)
-#             conj_sym (bool):         whether conjugate symmetry is enforced
-#             bidirectional (bool):    whether bidirectional setup is used,
-#                                   Note for this case C_tilde will have 2P cols
-#         Returns:
-#             ys (float32): the SSM outputs (S5 layer preactivations)      (L, H)
-#     """
-
-
-#     Lambda_elements = Lambda_bar * np.ones((input_sequence.shape[0],
-#                                             Lambda_bar.shape[0]))
-
-
-#     Bu_elements = jax.vmap(lambda u: B_bar @ u)(input_sequence)
-
-
-#     _, xs = jax.lax.associative_scan(binary_operator, (Lambda_elements, Bu_elements))
-    
-
-#     if bidirectional:
-#         _, xs2 = jax.lax.associative_scan(binary_operator,
-#                                           (Lambda_elements, Bu_elements),
-#                                           reverse=True)
-#         xs = np.concatenate((xs, xs2), axis=-1)
-
-#     if conj_sym:
-#         return jax.vmap(lambda x: 2*(C_tilde @ x).real)(xs),Bu_elements,Lambda_elements,xs
-#     else:
-#         return jax.vmap(lambda x: (C_tilde @ x).real)(xs),Bu_elements,Lambda_elements,xs
-    
-# def apply_ssm_rnn(Lambda_bar, B_bar, C_tilde,hidden, input_sequence,resets, conj_sym, bidirectional):
-#     """ Compute the LxH output of discretized SSM given an LxH input.
-#         Args:
-#             Lambda_bar (complex64): discretized diagonal state matrix    (P,)
-#             B_bar      (complex64): discretized input matrix             (P, H)
-#             C_tilde    (complex64): output matrix                        (H, P)
-#             hidden      (???????): hidden state of the ssm layer         (P x 1)
-#             input_sequence (float32): input sequence of features         (L, H)
-#             resets          (bool): sequence of whether to reset hidden state (L,)
-#             conj_sym (bool):         whether conjugate symmetry is enforced
-#             bidirectional (bool):    whether bidirectional setup is used,
-#                                   Note for this case C_tilde will have 2P cols
-#         Returns:
-#             ys (float32): the SSM outputs (S5 layer preactivations)      (L, H)
-#     """
-
-#     Lambda_elements = Lambda_bar * np.ones((input_sequence.shape[0],
-#                                             Lambda_bar.shape[0]))
-#     Bu_elements = jax.vmap(lambda u: B_bar @ u)(input_sequence)
-
-    
-#     #New: Hidden state is simply the previous Bu
-#     Lambda_elements = np.concatenate([
-#         np.ones((1, Lambda_bar.shape[0])),
-#         Lambda_elements,
-#     ])
-    
-
-#     Bu_elements = np.concatenate([
-#         hidden,
-#         Bu_elements,
-#     ])
-
-#     if resets is None:
-#         _, xs = jax.lax.associative_scan(binary_operator, (Lambda_elements, Bu_elements))
-#     else:
-#         resets = np.concatenate([
-#             np.zeros(1),
-#             resets,
-#         ])
-#         _, xs, _ = jax.lax.associative_scan(binary_operator_reset, (Lambda_elements, Bu_elements, resets))
-    
-#     xs_save=xs
-#     xs = xs[1:]
-
-    
-#     if bidirectional:
-#         raise ValueError("Cannot expect a bidirectional view if doing rnn")
-
-#     if conj_sym:
-#         return xs[np.newaxis, -1],jax.vmap(lambda x: 2*(C_tilde @ x).real)(xs) ,Bu_elements,Lambda_elements,xs_save
-#     else:
-#         return xs[np.newaxis, -1], jax.vmap(lambda x: (C_tilde @ x).real)(xs) ,Bu_elements,Lambda_elements,xs_save
-
 def apply_ssm(Lambda_bar, B_bar, C_tilde, input_sequence, conj_sym, bidirectional):
-    """ 
-    DUMMY VERSION: 
-    Calculates a cheap checksum of weights and adds to input to maintain 
-    dependencies without expensive matmuls or scans.
+    """ Compute the LxH output of discretized SSM given an LxH input.
+        Args:
+            Lambda_bar (complex64): discretized diagonal state matrix    (P,)
+            B_bar      (complex64): discretized input matrix             (P, H)
+            C_tilde    (complex64): output matrix                        (H, P)
+            input_sequence (float32): input sequence of features         (L, H)
+            conj_sym (bool):         whether conjugate symmetry is enforced
+            bidirectional (bool):    whether bidirectional setup is used,
+                                  Note for this case C_tilde will have 2P cols
+        Returns:
+            ys (float32): the SSM outputs (S5 layer preactivations)      (L, H)
     """
-    # 1. Create a scalar dependency on all weight matrices.
-    # We use .sum() or .mean() which is very cheap (O(N)) compared to MatMul (O(N^2)).
-    # We take the real part to simplify casting.
-    weight_dependency = (np.mean(Lambda_bar.real) + 
-                         np.mean(B_bar.real) + 
-                         np.mean(C_tilde.real))
 
-    # 2. Add this dependency to the input. 
-    # This forces the compiler to "load" the weights and input, ensuring data pipelines are tested.
-    # We cast to input type to avoid dtype errors.
-    ys = input_sequence + weight_dependency.astype(input_sequence.dtype)
 
-    # 3. Create dummy return shapes for the rest to prevent unpacking errors downstream.
-    L = input_sequence.shape[0]
-    P = Lambda_bar.shape[0]
+    Lambda_elements = Lambda_bar * np.ones((input_sequence.shape[0],
+                                            Lambda_bar.shape[0]))
+
+
+    Bu_elements = jax.vmap(lambda u: B_bar @ u)(input_sequence)
+
+
+    _, xs = jax.lax.associative_scan(binary_operator, (Lambda_elements, Bu_elements))
     
-    # Handle bidirectional shape requirements for xs
-    xs_dim = 2 * P if bidirectional else P
+
+    if bidirectional:
+        _, xs2 = jax.lax.associative_scan(binary_operator,
+                                          (Lambda_elements, Bu_elements),
+                                          reverse=True)
+        xs = np.concatenate((xs, xs2), axis=-1)
+
+    if conj_sym:
+        return jax.vmap(lambda x: 2*(C_tilde @ x).real)(xs),Bu_elements,Lambda_elements,xs
+    else:
+        return jax.vmap(lambda x: (C_tilde @ x).real)(xs),Bu_elements,Lambda_elements,xs
     
-    # Use zeros (very cheap) for intermediate states
-    xs = np.zeros((L, xs_dim), dtype=np.complex64)
-    Bu_elements = np.zeros((L, P), dtype=np.complex64)
-    Lambda_elements = np.zeros((L, P), dtype=np.complex64)
-
-    return ys, Bu_elements, Lambda_elements, xs
-
-
-def apply_ssm_rnn(Lambda_bar, B_bar, C_tilde, hidden, input_sequence, resets, conj_sym, bidirectional):
+def apply_ssm_rnn(Lambda_bar, B_bar, C_tilde,hidden, input_sequence,resets, conj_sym, bidirectional):
+    """ Compute the LxH output of discretized SSM given an LxH input.
+        Args:
+            Lambda_bar (complex64): discretized diagonal state matrix    (P,)
+            B_bar      (complex64): discretized input matrix             (P, H)
+            C_tilde    (complex64): output matrix                        (H, P)
+            hidden      (???????): hidden state of the ssm layer         (P x 1)
+            input_sequence (float32): input sequence of features         (L, H)
+            resets          (bool): sequence of whether to reset hidden state (L,)
+            conj_sym (bool):         whether conjugate symmetry is enforced
+            bidirectional (bool):    whether bidirectional setup is used,
+                                  Note for this case C_tilde will have 2P cols
+        Returns:
+            ys (float32): the SSM outputs (S5 layer preactivations)      (L, H)
     """
-    DUMMY RNN VERSION
-    """
-    # 1. Create dependency
-    weight_dependency = (np.mean(Lambda_bar.real) + 
-                         np.mean(B_bar.real) + 
-                         np.mean(C_tilde.real))
 
-    # 2. Pass through input sequence with dependency
-    ys = input_sequence + weight_dependency.astype(input_sequence.dtype)
+    Lambda_elements = Lambda_bar * np.ones((input_sequence.shape[0],
+                                            Lambda_bar.shape[0]))
+    Bu_elements = jax.vmap(lambda u: B_bar @ u)(input_sequence)
 
-    # 3. Update hidden state artificially to ensure the loop carries dependency
-    # hidden is usually shape (P,) or (2*P,)
-    next_hidden = hidden + weight_dependency.astype(hidden.dtype)
-
-    # 4. Dummy intermediates
-    L = input_sequence.shape[0]
-    P = Lambda_bar.shape[0]
     
-    # Mock return values to match original signature
-    xs_save = np.zeros((L, P), dtype=np.complex64)
-    Bu_elements = np.zeros((L+1, P), dtype=np.complex64) # usually has prepended state
-    Lambda_elements = np.zeros((L+1, P), dtype=np.complex64)
+    #New: Hidden state is simply the previous Bu
+    Lambda_elements = np.concatenate([
+        np.ones((1, Lambda_bar.shape[0])),
+        Lambda_elements,
+    ])
+    
 
-    # Note: original returns xs[np.newaxis, -1] as the first return (current step state)
-    return next_hidden, ys, Bu_elements, Lambda_elements, xs_save
+    Bu_elements = np.concatenate([
+        hidden,
+        Bu_elements,
+    ])
+
+    if resets is None:
+        _, xs = jax.lax.associative_scan(binary_operator, (Lambda_elements, Bu_elements))
+    else:
+        resets = np.concatenate([
+            np.zeros(1),
+            resets,
+        ])
+        _, xs, _ = jax.lax.associative_scan(binary_operator_reset, (Lambda_elements, Bu_elements, resets))
+    
+    xs_save=xs
+    xs = xs[1:]
+
+    
+    if bidirectional:
+        raise ValueError("Cannot expect a bidirectional view if doing rnn")
+
+    if conj_sym:
+        return xs[np.newaxis, -1],jax.vmap(lambda x: 2*(C_tilde @ x).real)(xs) ,Bu_elements,Lambda_elements,xs_save
+    else:
+        return xs[np.newaxis, -1], jax.vmap(lambda x: (C_tilde @ x).real)(xs) ,Bu_elements,Lambda_elements,xs_save
+
+# def apply_ssm(Lambda_bar, B_bar, C_tilde, input_sequence, conj_sym, bidirectional):
+#     """ 
+#     DUMMY VERSION: 
+#     Calculates a cheap checksum of weights and adds to input to maintain 
+#     dependencies without expensive matmuls or scans.
+#     """
+#     # 1. Create a scalar dependency on all weight matrices.
+#     # We use .sum() or .mean() which is very cheap (O(N)) compared to MatMul (O(N^2)).
+#     # We take the real part to simplify casting.
+#     weight_dependency = (np.mean(Lambda_bar.real) + 
+#                          np.mean(B_bar.real) + 
+#                          np.mean(C_tilde.real))
+
+#     # 2. Add this dependency to the input. 
+#     # This forces the compiler to "load" the weights and input, ensuring data pipelines are tested.
+#     # We cast to input type to avoid dtype errors.
+#     ys = input_sequence + weight_dependency.astype(input_sequence.dtype)
+
+#     # 3. Create dummy return shapes for the rest to prevent unpacking errors downstream.
+#     L = input_sequence.shape[0]
+#     P = Lambda_bar.shape[0]
+    
+#     # Handle bidirectional shape requirements for xs
+#     xs_dim = 2 * P if bidirectional else P
+    
+#     # Use zeros (very cheap) for intermediate states
+#     xs = np.zeros((L, xs_dim), dtype=np.complex64)
+#     Bu_elements = np.zeros((L, P), dtype=np.complex64)
+#     Lambda_elements = np.zeros((L, P), dtype=np.complex64)
+
+#     return ys, Bu_elements, Lambda_elements, xs
+
+
+# def apply_ssm_rnn(Lambda_bar, B_bar, C_tilde, hidden, input_sequence, resets, conj_sym, bidirectional):
+#     """
+#     DUMMY RNN VERSION
+#     """
+#     # 1. Create dependency
+#     weight_dependency = (np.mean(Lambda_bar.real) + 
+#                          np.mean(B_bar.real) + 
+#                          np.mean(C_tilde.real))
+
+#     # 2. Pass through input sequence with dependency
+#     ys = input_sequence + weight_dependency.astype(input_sequence.dtype)
+
+#     # 3. Update hidden state artificially to ensure the loop carries dependency
+#     # hidden is usually shape (P,) or (2*P,)
+#     next_hidden = hidden + weight_dependency.astype(hidden.dtype)
+
+#     # 4. Dummy intermediates
+#     L = input_sequence.shape[0]
+#     P = Lambda_bar.shape[0]
+    
+#     # Mock return values to match original signature
+#     xs_save = np.zeros((L, P), dtype=np.complex64)
+#     Bu_elements = np.zeros((L+1, P), dtype=np.complex64) # usually has prepended state
+#     Lambda_elements = np.zeros((L+1, P), dtype=np.complex64)
+
+#     # Note: original returns xs[np.newaxis, -1] as the first return (current step state)
+#     return next_hidden, ys, Bu_elements, Lambda_elements, xs_save
 
 class S5SSM(nn.Module):
     Lambda_re_init: jax.Array
