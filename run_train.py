@@ -186,7 +186,13 @@ if __name__ == "__main__":
 				help="Runs the training loop in overfit mode on a single batch of data. Validation and testing are from the same set. ")
 	parser.add_argument("--log_ce_tables", type=str2bool, default=False,
 				help="Logs the CE values on a per token level to wandb. Memory intensive.")
-	
+	parser.add_argument("--use_remat", type=str2bool, default=False,
+				help="Use gradient checkpointing (rematerialization) to reduce runtime memory. "
+				     "Trades compute for memory by recomputing activations during backward pass.")
+	parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
+				help="Number of gradient accumulation steps. Default is 1 (no accumulation). "
+				     "Effective batch size = per_gpu_bsz * num_devices * gradient_accumulation_steps.")
+
 	args = parser.parse_args()
 
 	# ============================================
@@ -340,9 +346,13 @@ if __name__ == "__main__":
 	print(f"    Per-GPU batch size: {args.per_gpu_bsz}")
 	print(f"    Devices per process: {args.num_devices}")
 	print(f"    Effective batch size (per process): {args.effective_bsz}")
+	print(f"    Gradient accumulation steps: {args.gradient_accumulation_steps}")
 	if is_distributed:
-		global_effective_bsz = args.effective_bsz * args.process_count
-		print(f"    Global effective batch size: {global_effective_bsz} (across {args.process_count} processes)")
+		global_effective_bsz = args.effective_bsz * args.process_count * args.gradient_accumulation_steps
+		print(f"    Global effective batch size: {global_effective_bsz} (across {args.process_count} processes, with {args.gradient_accumulation_steps} accumulation steps)")
+	else:
+		local_effective_bsz = args.effective_bsz * args.gradient_accumulation_steps
+		print(f"    Effective batch size (with accumulation): {local_effective_bsz}")
 	print()
 
 	from lob.train import train

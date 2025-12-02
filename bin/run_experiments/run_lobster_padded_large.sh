@@ -59,8 +59,8 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.90    # Use 90% GPU memory
 # export NCCL_P2P_DIRECT_DISABLE=1
 # export NCCL_SHM_DISABLE=1
 
-export JAX_TRACEBACK_IN_LOCATIONS=1
-export TF_GPU_ALLOCATOR=cuda_malloc_async
+# export JAX_TRACEBACK_IN_LOCATIONS=1
+# export TF_GPU_ALLOCATOR=cuda_malloc_async
 
 # JAX distributed coordination service timeout configuration (10 minutes for multi-node)
 export JAX_COORDINATOR_TIMEOUT_MS=600000  # 10 minutes in milliseconds
@@ -125,6 +125,7 @@ python -u -B run_train.py \
         --shuffle_train=True \
         --debug_overfit=False \
         --lr_patience=3 \
+        --use_remat=True \
         --USE_WANDB=True \
         --wandb_project=lobs5-3072x32-tok24 \
         --wandb_entity=kang-oxford
