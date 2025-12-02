@@ -31,6 +31,7 @@ class LobPredModel(nn.Module):
             step_rescale  (float32):  allows for uniformly changing the timescale parameter,
                                     e.g. after training on a different resolution for
                                     the speech commands benchmark
+            mlp_ratio   (float32):  expansion ratio for MLP block
     """
     ssm: nn.Module
     d_output: int
@@ -45,6 +46,7 @@ class LobPredModel(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
+    mlp_ratio: float = 4.0
 
     def setup(self):
         """
@@ -61,6 +63,7 @@ class LobPredModel(nn.Module):
                             batchnorm=self.batchnorm,
                             bn_momentum=self.bn_momentum,
                             step_rescale=self.step_rescale,
+                            mlp_ratio=self.mlp_ratio,
                                         )
         # GPT风格初始化: stddev = 0.02 / sqrt(n_layers) 防止梯度爆炸
         gpt_init = nn.initializers.normal(stddev=0.02 / math.sqrt(self.n_layers))
@@ -159,6 +162,7 @@ class LobBookModel(nn.Module):
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
     dtype: Any = None  # 计算 dtype，由 USE_BF16 环境变量控制
+    mlp_ratio: float = 4.0
 
     def setup(self):
         """
@@ -184,6 +188,7 @@ class LobBookModel(nn.Module):
                 bn_momentum=self.bn_momentum,
                 step_rescale=self.step_rescale,
                 dtype=compute_dtype,
+                mlp_ratio=self.mlp_ratio,
             ) for _ in range(self.n_pre_layers))
         # GPT风格初始化: stddev = 0.02 / sqrt(n_layers) 防止梯度爆炸
         n_total_layers = self.n_pre_layers + self.n_post_layers
@@ -206,6 +211,7 @@ class LobBookModel(nn.Module):
                 bn_momentum=self.bn_momentum,
                 step_rescale=self.step_rescale,
                 dtype=compute_dtype,
+                mlp_ratio=self.mlp_ratio,
             )
             for _ in range(self.n_post_layers)
         )
@@ -276,6 +282,7 @@ class FullLobPredModel(nn.Module):
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
     dtype: Any = None  # 计算 dtype，由 USE_BF16 环境变量控制
+    mlp_ratio: float = 4.0
 
     def setup(self):
         """
@@ -306,6 +313,7 @@ class FullLobPredModel(nn.Module):
             use_embed_layer=True,
             vocab_size=self.d_output,
             dtype=compute_dtype,
+            mlp_ratio=self.mlp_ratio,
         )
         # applied to transposed message output to get seq len for fusion
         self.message_out_proj = nn.Dense(self.d_model, kernel_init=gpt_init, dtype=compute_dtype)
@@ -323,6 +331,7 @@ class FullLobPredModel(nn.Module):
             bn_momentum=self.bn_momentum,
             step_rescale=self.step_rescale,
             dtype=compute_dtype,
+            mlp_ratio=self.mlp_ratio,
         )
         # applied to transposed book output to get seq len for fusion
         self.book_out_proj = nn.Dense(self.d_model, kernel_init=gpt_init, dtype=compute_dtype)
@@ -338,6 +347,7 @@ class FullLobPredModel(nn.Module):
             bn_momentum=self.bn_momentum,
             step_rescale=self.step_rescale,
             dtype=compute_dtype,
+            mlp_ratio=self.mlp_ratio,
         )
         # decoder 输出 logits，需要 cast 回 FP32 做 softmax，所以这里不用 dtype
         self.decoder = nn.Dense(self.d_output, kernel_init=gpt_init)
@@ -405,6 +415,7 @@ class PaddedLobPredModel(nn.Module):
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
     dtype: Any = None  # 计算 dtype，由 USE_BF16 环境变量控制
+    mlp_ratio: float = 4.0
 
     def setup(self):
         """
@@ -432,6 +443,7 @@ class PaddedLobPredModel(nn.Module):
             use_embed_layer=True,
             vocab_size=self.d_output,
             dtype=compute_dtype,
+            mlp_ratio=self.mlp_ratio,
         )
 
         # applied to transposed message output to get seq len for fusion
@@ -451,6 +463,7 @@ class PaddedLobPredModel(nn.Module):
             bn_momentum=self.bn_momentum,
             step_rescale=self.step_rescale,
             dtype=compute_dtype,
+            mlp_ratio=self.mlp_ratio,
         )
 
 
@@ -470,6 +483,7 @@ class PaddedLobPredModel(nn.Module):
             bn_momentum=self.bn_momentum,
             step_rescale=self.step_rescale,
             dtype=compute_dtype,
+            mlp_ratio=self.mlp_ratio,
         )
         # GPT风格初始化: stddev = 0.02 / sqrt(n_layers) 防止梯度爆炸
         n_total_layers = self.n_message_layers + self.n_book_pre_layers + self.n_book_post_layers + self.n_fused_layers

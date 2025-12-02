@@ -24,6 +24,7 @@ class StackedEncoderModel(nn.Module):
                                     e.g. after training on a different resolution for
                                     the speech commands benchmark
             dtype       (Any):      computation dtype (bfloat16 for mixed precision, float32 otherwise)
+            mlp_ratio   (float32):  expansion ratio for MLP block (d_ff = mlp_ratio * d_model)
     """
     ssm: nn.Module
     d_model: int
@@ -38,6 +39,7 @@ class StackedEncoderModel(nn.Module):
     use_embed_layer: bool = False
     vocab_size: int = -1  # only used if use_encode_layer is True
     dtype: Any = None  # None means use default (controlled by USE_BF16 env var)
+    mlp_ratio: float = 4.0  # Transformer-style MLP expansion ratio
 
     def setup(self):
         """
@@ -78,6 +80,7 @@ class StackedEncoderModel(nn.Module):
                 bn_momentum=self.bn_momentum,
                 step_rescale=self.step_rescale,
                 dtype=compute_dtype,
+                mlp_ratio=self.mlp_ratio,
             )
             for _ in range(self.n_layers)
         ]
@@ -183,6 +186,7 @@ class ClassificationModel(nn.Module):
             step_rescale  (float32):  allows for uniformly changing the timescale parameter,
                                     e.g. after training on a different resolution for
                                     the speech commands benchmark
+            mlp_ratio   (float32):  expansion ratio for MLP block
     """
     ssm: nn.Module
     d_output: int
@@ -197,6 +201,7 @@ class ClassificationModel(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
+    mlp_ratio: float = 4.0
 
     def setup(self):
         """
@@ -213,6 +218,7 @@ class ClassificationModel(nn.Module):
                             batchnorm=self.batchnorm,
                             bn_momentum=self.bn_momentum,
                             step_rescale=self.step_rescale,
+                            mlp_ratio=self.mlp_ratio,
                                         )
         # GPT风格初始化: stddev = 0.02 / sqrt(n_layers) 防止梯度爆炸
         gpt_init = nn.initializers.normal(stddev=0.02 / math.sqrt(self.n_layers))
@@ -316,6 +322,7 @@ class RetrievalModel(nn.Module):
             prenorm     (bool):     apply prenorm if true or postnorm if false
             batchnorm   (bool):     apply batchnorm if true or layernorm if false
             bn_momentum (float32):  the batchnorm momentum if batchnorm is used
+            mlp_ratio   (float32):  expansion ratio for MLP block
     """
     ssm: nn.Module
     d_output: int
@@ -329,6 +336,7 @@ class RetrievalModel(nn.Module):
     batchnorm: bool = False
     bn_momentum: float = 0.9
     step_rescale: float = 1.0
+    mlp_ratio: float = 4.0
 
     def setup(self):
         """
@@ -355,6 +363,7 @@ class RetrievalModel(nn.Module):
                             batchnorm=self.batchnorm,
                             bn_momentum=self.bn_momentum,
                             step_rescale=self.step_rescale,
+                            mlp_ratio=self.mlp_ratio,
                                         )
         BatchRetrievalDecoder = nn.vmap(
             RetrievalDecoder,
