@@ -340,7 +340,7 @@ class S5SSM(nn.Module):
             output sequence (float32): (L, H)
         """
 
-        hidden, ys, _,_,_ = apply_ssm_rnn(self.Lambda_bar,
+        hidden, ys = apply_ssm_rnn(self.Lambda_bar,
                        self.B_bar,
                        self.C_tilde,
                        hidden,
