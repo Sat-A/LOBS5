@@ -819,8 +819,8 @@ def train_step_rnn(
     
     def loss_fn(params):
         def single_elem_loss(carry,xs):
-            shapes=jax.tree_util.tree_map(lambda x: x.shape,xs)
-            print("Shapes before using:",shapes)
+            # shapes=jax.tree_util.tree_map(lambda x: x.shape,xs)
+            # print("Shapes before using:",shapes)  # DEBUG: commented out to reduce XLA compile memory
             batch_inputs,batch_integration_timesteps,batch_labels=xs
             dones=(np.zeros_like(batch_inputs[0],dtype=bool),)*len(hiddens)
             hiddens=carry

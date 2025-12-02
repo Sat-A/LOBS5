@@ -153,7 +153,7 @@ def apply_ssm_rnn(Lambda_bar, B_bar, C_tilde,hidden, input_sequence,resets, conj
         ])
         _, xs, _ = jax.lax.associative_scan(binary_operator_reset, (Lambda_elements, Bu_elements, resets))
 
-    # 提取 hidden state (最后一个状态用于下一次调用)
+    # extract hidden state (the last state is used for the next call)
     hidden_out = xs[np.newaxis, -1]
     xs = xs[1:]
 

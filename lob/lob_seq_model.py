@@ -572,8 +572,8 @@ class PaddedLobPredModel(nn.Module):
         elif self.mode in ["none"]:
             pass
         elif self.mode in ['ema']:
-             print("x",x)
-             print("ema",ema)
+             # print("x",x)  # DEBUG: commented out to reduce XLA compile memory
+             # print("ema",ema)  # DEBUG: commented out to reduce XLA compile memory
              x,fo=ewma_vectorized_safe(x,2 /(22 + 1.0),fo,override)
         else:
             raise NotImplementedError("Must double check before running rnn")
@@ -860,7 +860,7 @@ def ewma_vectorized(data, alpha, offset=None, dtype=None, order='C', out=None):
         the same shape as the input. If not provided or `None`,
         a freshly-allocated array is returned.
     """
-    print("CALL")
+    # print("CALL")  # DEBUG: commented out to reduce XLA compile memory
     data = jnp.array(data, copy=False)
 
     if dtype is None:
