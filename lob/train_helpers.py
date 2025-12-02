@@ -653,11 +653,11 @@ def train_step(
         # No need for tree_map here - direct use saves 30-40% overhead
 
         # ===== NaN检测点1: 输入参数 =====
-        params_has_nan = jax.tree_util.tree_reduce(
-            lambda a, b: a | b,
-            jax.tree_util.tree_map(lambda x: np.any(np.isnan(x)), params),
-            False
-        )
+        # params_has_nan = jax.tree_util.tree_reduce(
+        #     lambda a, b: a | b,
+        #     jax.tree_util.tree_map(lambda x: np.any(np.isnan(x)), params),
+        #     False
+        # )
         # jax.debug.print("[NaN Check 1] Params has NaN: {}", params_has_nan)
 
         if batchnorm:
@@ -678,7 +678,7 @@ def train_step(
             )
 
         # ===== NaN检测点2: Forward输出 =====
-        logits_has_nan = np.any(np.isnan(logits))
+        # logits_has_nan = np.any(np.isnan(logits))
         # jax.debug.print("[NaN Check 2] Logits has NaN: {}, dtype: {}", logits_has_nan, logits.dtype)
 
         # BF16 Mixed Precision: Cast logits back to FP32 for loss computation
@@ -703,7 +703,7 @@ def train_step(
         loss = np.mean(ce)
 
         # ===== NaN检测点3: Loss =====
-        loss_has_nan = np.isnan(loss)
+        # loss_has_nan = np.isnan(loss)
         # jax.debug.print("[NaN Check 3] Loss has NaN: {}, value: {:.6f}", loss_has_nan, loss)
 
         return loss, (mod_vars, logits,ce)
@@ -711,54 +711,54 @@ def train_step(
     (loss, (mod_vars, logits,ce)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
 
     # ===== NaN检测点4: 梯度 =====
-    grads_has_nan = jax.tree_util.tree_reduce(
-        lambda a, b: a | b,
-        jax.tree_util.tree_map(lambda x: np.any(np.isnan(x)), grads),
-        False
-    )
+    # grads_has_nan = jax.tree_util.tree_reduce(
+    #     lambda a, b: a | b,
+    #     jax.tree_util.tree_map(lambda x: np.any(np.isnan(x)), grads),
+    #     False
+    # )
     # jax.debug.print("[NaN Check 4] Grads has NaN: {}", grads_has_nan)
 
     # ===== NaN检测点5: 梯度范数 =====
-    grad_norm = np.sqrt(jax.tree_util.tree_reduce(
-        lambda a, b: a + b,
-        jax.tree_util.tree_map(lambda x: np.sum(x.astype(np.float32) ** 2), grads),
-        0.0
-    ))
+    # grad_norm = np.sqrt(jax.tree_util.tree_reduce(
+    #     lambda a, b: a + b,
+    #     jax.tree_util.tree_map(lambda x: np.sum(x.astype(np.float32) ** 2), grads),
+    #     0.0
+    # ))
     # jax.debug.print("[NaN Check 5] Grad norm: {:.6f}", grad_norm)
 
     # ===== 分层梯度统计 (写入JSON文件) =====
     # 计算每个叶子节点的梯度范数
-    def compute_leaf_norm(grad):
-        return np.sqrt(np.sum(grad.astype(np.float32) ** 2))
+    # def compute_leaf_norm(grad):
+    #     return np.sqrt(np.sum(grad.astype(np.float32) ** 2))
 
-    leaf_norms = jax.tree_util.tree_map(compute_leaf_norm, grads)
-    leaf_norms_with_path = jax.tree_util.tree_leaves_with_path(leaf_norms)
+    # leaf_norms = jax.tree_util.tree_map(compute_leaf_norm, grads)
+    # leaf_norms_with_path = jax.tree_util.tree_leaves_with_path(leaf_norms)
 
-    # 构建记录并写入文件
-    def write_grad_stats(step_val, global_norm_val, leaf_norms_with_path_val):
-        """在host端写入梯度统计到JSON文件"""
-        # 从环境变量获取精度模式
-        precision = os.environ.get('GRAD_STATS_PRECISION', 'bf16')
+    # # 构建记录并写入文件
+    # def write_grad_stats(step_val, global_norm_val, leaf_norms_with_path_val):
+    #     """在host端写入梯度统计到JSON文件"""
+    #     # 从环境变量获取精度模式
+    #     precision = os.environ.get('GRAD_STATS_PRECISION', 'bf16')
 
-        # 转换为dict: path -> norm
-        layer_norms_dict = {}
-        for path, norm in leaf_norms_with_path_val:
-            path_str = '/'.join(str(k.key) for k in path)
-            layer_norms_dict[path_str] = float(norm)
+    #     # 转换为dict: path -> norm
+    #     layer_norms_dict = {}
+    #     for path, norm in leaf_norms_with_path_val:
+    #         path_str = '/'.join(str(k.key) for k in path)
+    #         layer_norms_dict[path_str] = float(norm)
 
-        record = {
-            'step': int(step_val),
-            'precision': precision,
-            'global_norm': float(global_norm_val),
-            'layer_norms': layer_norms_dict,
-        }
+    #     record = {
+    #         'step': int(step_val),
+    #         'precision': precision,
+    #         'global_norm': float(global_norm_val),
+    #         'layer_norms': layer_norms_dict,
+    #     }
 
-        filepath = f"grad_stats_{precision}.jsonl"
-        with open(filepath, 'a') as f:
-            f.write(json.dumps(record) + '\n')
+    #     filepath = f"grad_stats_{precision}.jsonl"
+    #     with open(filepath, 'a') as f:
+    #         f.write(json.dumps(record) + '\n')
 
     # 使用callback在host端执行文件写入
-    jax.debug.callback(write_grad_stats, state.step, grad_norm, leaf_norms_with_path)
+    # jax.debug.callback(write_grad_stats, state.step, grad_norm, leaf_norms_with_path)
 
     # # ===== 梯度裁剪 (Gradient Clipping) =====
     # # 使用全局范数裁剪
@@ -782,11 +782,11 @@ def train_step(
         state = state.apply_gradients(grads=grads)
 
     # ===== NaN检测点6: 更新后参数 =====
-    new_params_has_nan = jax.tree_util.tree_reduce(
-        lambda a, b: a | b,
-        jax.tree_util.tree_map(lambda x: np.any(np.isnan(x)), state.params),
-        False
-    )
+    # new_params_has_nan = jax.tree_util.tree_reduce(
+    #     lambda a, b: a | b,
+    #     jax.tree_util.tree_map(lambda x: np.any(np.isnan(x)), state.params),
+    #     False
+    # )
     # jax.debug.print("[NaN Check 6] Updated params has NaN: {}", new_params_has_nan)
 
     #return loss, mod_vars, grads, state
