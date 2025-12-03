@@ -11,8 +11,6 @@ Key features:
 - Compatible with existing LOBS5 data pipeline
 """
 
-import os
-import sys
 import jax
 import jax.numpy as jnp
 from jax.sharding import NamedSharding, PartitionSpec as P
@@ -21,39 +19,10 @@ import argparse
 from tqdm import tqdm
 import time
 
-# Add HyperscaleES to path - import directly to avoid gymnax dependency in rl.py
-import importlib.util
+# Import centralized utilities
+from ..utils.import_utils import get_all_noisers
 
-_hyperscalees_path = os.path.join(os.path.dirname(__file__), '../../HyperscaleES/src')
-sys.path.insert(0, _hyperscalees_path)
-
-def _load_module(module_name, file_path):
-    spec = importlib.util.spec_from_file_location(module_name, file_path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-# Load noiser submodules directly
-_base_noiser = _load_module('hyperscalees.noiser.base_noiser',
-    os.path.join(_hyperscalees_path, 'hyperscalees/noiser/base_noiser.py'))
-_open_es = _load_module('hyperscalees.noiser.open_es',
-    os.path.join(_hyperscalees_path, 'hyperscalees/noiser/open_es.py'))
-_eggroll = _load_module('hyperscalees.noiser.eggroll',
-    os.path.join(_hyperscalees_path, 'hyperscalees/noiser/eggroll.py'))
-_eggroll_bs = _load_module('hyperscalees.noiser.eggroll_baseline_subtraction',
-    os.path.join(_hyperscalees_path, 'hyperscalees/noiser/eggroll_baseline_subtraction.py'))
-_sparse = _load_module('hyperscalees.noiser.sparse',
-    os.path.join(_hyperscalees_path, 'hyperscalees/noiser/sparse.py'))
-
-all_noisers = {
-    "noop": _base_noiser.Noiser,
-    "open_es": _open_es.OpenES,
-    "eggroll": _eggroll.EggRoll,
-    "eggrollbs": _eggroll_bs.EggRollBS,
-    "reeggroll": _eggroll.EggRoll,
-    "sparse": _sparse.Sparse,
-}
+all_noisers = get_all_noisers()
 
 # simple_es_tree_key is imported from common.py which we already set up
 from ..models.common import simple_es_tree_key

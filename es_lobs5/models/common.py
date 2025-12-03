@@ -9,30 +9,12 @@ Imports most components from HyperscaleES, only adds S5-specific ones:
 import jax
 import jax.numpy as jnp
 
-# Import from HyperscaleES - use importlib to avoid triggering rl.py import
-import sys
-import os
-import importlib.util
+# Import from centralized import_utils to avoid duplication
+from ..utils.import_utils import get_base_model, get_common, get_hyperscalees_path
 
-_hyperscalees_path = os.path.join(os.path.dirname(__file__), '../../HyperscaleES/src')
-sys.path.insert(0, _hyperscalees_path)
-
-# Load base_model directly without triggering __init__.py
-def _load_module(module_name, file_path):
-    spec = importlib.util.spec_from_file_location(module_name, file_path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-_base_model = _load_module(
-    'hyperscalees.models.base_model',
-    os.path.join(_hyperscalees_path, 'hyperscalees/models/base_model.py')
-)
-_common = _load_module(
-    'hyperscalees.models.common',
-    os.path.join(_hyperscalees_path, 'hyperscalees/models/common.py')
-)
+_base_model = get_base_model()
+_common = get_common()
+_hyperscalees_path = get_hyperscalees_path()
 
 # Extract what we need from loaded modules
 Model = _base_model.Model

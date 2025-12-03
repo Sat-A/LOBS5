@@ -11,8 +11,25 @@ from .checkpoint_converter import (
     convert_and_load_checkpoint,
 )
 
+from .import_utils import (
+    load_module,
+    get_hyperscalees_path,
+    ensure_hyperscalees_path,
+    get_base_model,
+    get_common,
+    get_noiser_modules,
+    get_all_noisers,
+)
+
 __all__ = [
     'load_flax_checkpoint',
     'convert_flax_to_es',
     'convert_and_load_checkpoint',
+    'load_module',
+    'get_hyperscalees_path',
+    'ensure_hyperscalees_path',
+    'get_base_model',
+    'get_common',
+    'get_noiser_modules',
+    'get_all_noisers',
 ]
