@@ -59,6 +59,9 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.90    # Use 90% GPU memory
 # export NCCL_P2P_DIRECT_DISABLE=1
 # export NCCL_SHM_DISABLE=1
 
+# export JAX_TRACEBACK_IN_LOCATIONS=1
+# export TF_GPU_ALLOCATOR=cuda_malloc_async
+
 # JAX distributed coordination service timeout configuration (10 minutes for multi-node)
 export JAX_COORDINATOR_TIMEOUT_MS=600000  # 10 minutes in milliseconds
 export TF_CPP_MIN_LOG_LEVEL=1  # Reduce TensorFlow spam but keep important messages
@@ -102,16 +105,16 @@ nvidia-smi --list-gpus | head -4
 # Run Python with all arguments passed through
 # -u: unbuffered output for real-time logging
 # -B: don't write .pyc files
-# DEBUG: 小模型测试resume功能 (1024x12)
+# 3072 d_model x 32 layers x 48 blocks (from commit 12fe4a9)
 python -u -B run_train.py \
         --C_init=trunc_standard_normal --prenorm=True --batchnorm=False --bidirectional=False \
-        --blocks=16 --per_gpu_bsz=2 --d_model=1024 --dataset=lobster-prediction --merging=padded \
+        --blocks=48 --per_gpu_bsz=2 --d_model=3072 --dataset=lobster-prediction --merging=padded \
         --dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/GOOG_GOOGL_2016TO2021_24tok_preproc/GOOG' \
         --test_dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/JAN2023/GOOG_24tok_preproc' \
         --data_mode='preproc' \
-         --clip_eigs=True --activation_fn=half_glu1 \
-        --dt_global=False --epochs=5 --jax_seed=42 --lr_factor=1 --n_layers=12 \
-        --opt_config=standard --p_dropout=0.0 --ssm_lr_base=0.00003 --ssm_size_base=1024 \
+        --clip_eigs=True --activation_fn=half_glu1 \
+        --dt_global=False --epochs=20 --jax_seed=42 --lr_factor=1 --n_layers=32 \
+        --opt_config=standard --p_dropout=0.0 --ssm_lr_base=0.0001 --ssm_size_base=3072 \
         --warmup_end=1 --weight_decay=0.05 --msg_seq_len=500 \
         --use_book_data=True --use_simple_book=False --book_transform=True  \
         --masking=none \
@@ -122,11 +125,10 @@ python -u -B run_train.py \
         --shuffle_train=True \
         --debug_overfit=False \
         --lr_patience=3 \
-        --USE_WANDB=False \
-        --wandb_project=lobs5-test-resume \
-        --wandb_entity=kang-oxford \
-        --restore='checkpoints/offline_1636101_1636101' \
-        --restore_step=0 \
+        --use_remat=True \
+        --USE_WANDB=True \
+        --wandb_project=lobs5-3072x32-tok24 \
+        --wandb_entity=kang-oxford
 
 
         # --dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/GOOG_GOOGL_2016TO2021_24tok_encoded/GOOGL' \

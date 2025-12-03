@@ -115,9 +115,9 @@ def apply_ssm(Lambda_bar, B_bar, C_tilde, input_sequence, conj_sym, bidirectiona
         xs = np.concatenate((xs, xs2), axis=-1)
 
     if conj_sym:
-        return jax.vmap(lambda x: 2*(C_tilde @ x).real)(xs),Bu_elements,Lambda_elements,xs
+        return jax.vmap(lambda x: 2*(C_tilde @ x).real)(xs)
     else:
-        return jax.vmap(lambda x: (C_tilde @ x).real)(xs),Bu_elements,Lambda_elements,xs
+        return jax.vmap(lambda x: (C_tilde @ x).real)(xs)
     
 def apply_ssm_rnn(Lambda_bar, B_bar, C_tilde,hidden, input_sequence,resets, conj_sym, bidirectional):
     """ Compute the LxH output of discretized SSM given an LxH input.
@@ -160,18 +160,18 @@ def apply_ssm_rnn(Lambda_bar, B_bar, C_tilde,hidden, input_sequence,resets, conj
             resets,
         ])
         _, xs, _ = jax.lax.associative_scan(binary_operator_reset, (Lambda_elements, Bu_elements, resets))
-    
-    xs_save=xs
+
+    # extract hidden state (the last state is used for the next call)
+    hidden_out = xs[np.newaxis, -1]
     xs = xs[1:]
 
-    
     if bidirectional:
         raise ValueError("Cannot expect a bidirectional view if doing rnn")
 
     if conj_sym:
-        return xs[np.newaxis, -1],jax.vmap(lambda x: 2*(C_tilde @ x).real)(xs) ,Bu_elements,Lambda_elements,xs_save
+        return hidden_out, jax.vmap(lambda x: 2*(C_tilde @ x).real)(xs)
     else:
-        return xs[np.newaxis, -1], jax.vmap(lambda x: (C_tilde @ x).real)(xs) ,Bu_elements,Lambda_elements,xs_save
+        return hidden_out, jax.vmap(lambda x: (C_tilde @ x).real)(xs)
 
 # def apply_ssm(Lambda_bar, B_bar, C_tilde, input_sequence, conj_sym, bidirectional):
 #     """ 
@@ -384,7 +384,7 @@ class S5SSM(nn.Module):
         input_dtype = input_sequence.dtype
         input_fp32 = input_sequence.astype(np.float32)
 
-        ys,Bu_elements_call,Lambda_elements_call,xs_call= apply_ssm(self.Lambda_bar,
+        ys = apply_ssm(self.Lambda_bar,
                        self.B_bar,
                        self.C_tilde,
                        input_fp32,
@@ -408,7 +408,7 @@ class S5SSM(nn.Module):
             output sequence (float32): (L, H)
         """
 
-        hidden, ys, _,_,_ = apply_ssm_rnn(self.Lambda_bar,
+        hidden, ys = apply_ssm_rnn(self.Lambda_bar,
                        self.B_bar,
                        self.C_tilde,
                        hidden,
