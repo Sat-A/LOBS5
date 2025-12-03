@@ -204,7 +204,7 @@ def train(args):
         print(f"[DEBUG] Process 0: Creating checkpoint manager options...")
         mgr_options = ocp.CheckpointManagerOptions(
             save_interval_steps=1,
-            create=True,
+            create=False,
             max_to_keep=10,
             keep_period=5,
             # step_prefix=f'{run.name}_{run.id}',
