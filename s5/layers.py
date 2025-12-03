@@ -20,6 +20,8 @@ class SequenceLayer(nn.Module):
                                     e.g. after training on a different resolution for
                                     the speech commands benchmark
             dtype       (Any):      computation dtype for Dense layers (bfloat16 or float32)
+            mlp_ratio   (float32):  expansion ratio for MLP block (d_ff = mlp_ratio * d_model)
+                                    Only used for swiglu/mlp_gelu activations
     """
     ssm: nn.Module
     dropout: float
@@ -31,26 +33,39 @@ class SequenceLayer(nn.Module):
     bn_momentum: float = 0.90
     step_rescale: float = 1.0
     dtype: Any = jax.numpy.float32  # 默认 FP32，由上层传入 BF16
-    use_remat: bool = False  # Gradient checkpointing: 反向时重计算激活值以节省内存
+    mlp_ratio: float = 4.0  # Transformer-style MLP expansion ratio
 
     def setup(self):
         """Initializes the ssm, batch/layer norm and dropout
         """
-        # 使用 nn.remat 包装 SSM 以节省内存 (反向时重计算)
-        if self.use_remat:
-            self.seq = nn.remat(self.ssm)(step_rescale=self.step_rescale)
-        else:
-            self.seq = self.ssm(step_rescale=self.step_rescale)
+        self.seq = self.ssm(step_rescale=self.step_rescale)
 
         # GPT风格初始化: stddev=0.02 防止梯度爆炸
         gpt_init = nn.initializers.normal(stddev=0.02)
 
         # Dense 层使用 dtype 控制计算精度，param_dtype 默认 FP32 (master weights)
+        # Legacy GLU activations (D -> D, no expansion)
         if self.activation in ["full_glu"]:
             self.out1 = nn.Dense(self.d_model, kernel_init=gpt_init, dtype=self.dtype)
             self.out2 = nn.Dense(self.d_model, kernel_init=gpt_init, dtype=self.dtype)
         elif self.activation in ["half_glu1", "half_glu2"]:
             self.out2 = nn.Dense(self.d_model, kernel_init=gpt_init, dtype=self.dtype)
+
+        # NEW: Transformer-style MLP (D -> d_ff -> D)
+        elif self.activation in ["swiglu"]:
+            # SwiGLU: used in LLaMA, Qwen, etc.
+            # d_ff = mlp_ratio * d_model, but for SwiGLU we use 2/3 of that
+            # to keep param count similar (since we have 3 projections)
+            d_ff = int(self.d_model * self.mlp_ratio * 2 / 3)
+            self.up_gate = nn.Dense(d_ff, kernel_init=gpt_init, dtype=self.dtype)   # gate projection
+            self.up_proj = nn.Dense(d_ff, kernel_init=gpt_init, dtype=self.dtype)   # value projection
+            self.down_proj = nn.Dense(self.d_model, kernel_init=gpt_init, dtype=self.dtype)  # down projection
+
+        elif self.activation in ["mlp_gelu"]:
+            # Standard Transformer MLP: D -> 4D -> D
+            d_ff = int(self.d_model * self.mlp_ratio)
+            self.up_proj = nn.Dense(d_ff, kernel_init=gpt_init, dtype=self.dtype)
+            self.down_proj = nn.Dense(self.d_model, kernel_init=gpt_init, dtype=self.dtype)
 
         if self.batchnorm:
             self.norm = nn.BatchNorm(use_running_average=not self.training,
@@ -65,28 +80,8 @@ class SequenceLayer(nn.Module):
             deterministic=not self.training,
         )
 
-    def __call__(self, x):
-        """
-        Compute the LxH output of S5 layer given an LxH input.
-        Args:
-             x (float32): input sequence (L, d_model)
-        Returns:
-            output sequence (float32): (L, d_model)
-        """
-        # remat 已在 setup() 中应用到 self.seq，直接调用 _forward
-        return self._forward(x)
-
-    def _forward(self, x):
-        """Internal forward pass, may be checkpointed for memory efficiency."""
-        #jax.debug.print("call x before prenorm : {}",x)
-
-        skip = x
-        if self.prenorm:
-            x = self.norm(x)
-
-        #jax.debug.print("call x before ssm : {}",x)
-        x = self.seq(x)
-        #jax.debug.print("call x_m after ssm : {}",x)
+    def _apply_activation(self, x):
+        """Apply activation/MLP block after SSM."""
         if self.activation in ["full_glu"]:
             x = self.drop(nn.gelu(x))
             x = self.out1(x) * jax.nn.sigmoid(self.out2(x))
@@ -102,17 +97,45 @@ class SequenceLayer(nn.Module):
             x = self.drop(x)
         elif self.activation in ["gelu"]:
             x = self.drop(nn.gelu(x))
+
+        # NEW: Transformer-style MLP activations (no dropout, like modern LLMs)
+        elif self.activation in ["swiglu"]:
+            # SwiGLU: silu(gate) * value, then down-project
+            # Like LLaMA/Qwen: x = down(silu(gate(x)) * up(x))
+            gate = jax.nn.silu(self.up_gate(x))  # D -> d_ff, with SiLU
+            value = self.up_proj(x)              # D -> d_ff
+            x = gate * value                     # element-wise gating
+            x = self.down_proj(x)                # d_ff -> D
+
+        elif self.activation in ["mlp_gelu"]:
+            # Standard Transformer MLP: up -> gelu -> down
+            x = self.up_proj(x)      # D -> d_ff
+            x = nn.gelu(x)
+            x = self.down_proj(x)    # d_ff -> D
+
         else:
             raise NotImplementedError(
                    "Activation: {} not implemented".format(self.activation))
+        return x
 
-        #jax.debug.print("call x_m[0:5] after activation : {}",x[0:2][0][0:2])
+    def __call__(self, x):
+        """
+        Compute the LxH output of S5 layer given an LxH input.
+        Args:
+             x (float32): input sequence (L, d_model)
+        Returns:
+            output sequence (float32): (L, d_model)
+        """
+        skip = x
+        if self.prenorm:
+            x = self.norm(x)
 
+        x = self.seq(x)
+        x = self._apply_activation(x)
 
         x = skip + x
         if not self.prenorm:
             x = self.norm(x)
-
 
         return x
 
@@ -126,39 +149,12 @@ class SequenceLayer(nn.Module):
         Returns:
             output sequence (float32): (L, d_model)
         """
-        # remat 已在 setup() 中应用到 self.seq，直接调用 _forward_rnn
-        return self._forward_rnn(hidden, x, d)
-
-    def _forward_rnn(self, hidden, x, d):
-        """Internal RNN forward pass, may be checkpointed for memory efficiency."""
-        #jax.debug.print("call_rnn x before prenorm : {}",x)
-
         skip = x
         if self.prenorm:
             x = self.norm(x)
 
         hidden, x = self.seq.__call_rnn__(hidden, x, d)
-        #hidden, x = jax.vmap(self.seq.__call_rnn__, in_axes=(None,1,None), out_axes=1)(hidden, x, d)
-
-
-        if self.activation in ["full_glu"]:
-            x = self.drop(nn.gelu(x))
-            x = self.out1(x) * jax.nn.sigmoid(self.out2(x))
-            x = self.drop(x)
-        elif self.activation in ["half_glu1"]:
-            x = self.drop(nn.gelu(x))
-            x = x * jax.nn.sigmoid(self.out2(x))
-            x = self.drop(x)
-        elif self.activation in ["half_glu2"]:
-            # Only apply GELU to the gate input
-            x1 = self.drop(nn.gelu(x))
-            x = x * jax.nn.sigmoid(self.out2(x1))
-            x = self.drop(x)
-        elif self.activation in ["gelu"]:
-            x = self.drop(nn.gelu(x))
-        else:
-            raise NotImplementedError(
-                "Activation: {} not implemented".format(self.activation))
+        x = self._apply_activation(x)
 
         x = skip + x
         if not self.prenorm:

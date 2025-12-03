@@ -278,7 +278,7 @@ def init_train_state(
                 prenorm=args.prenorm,
                 batchnorm=args.batchnorm,
                 bn_momentum=args.bn_momentum,
-                use_remat=getattr(args, 'use_remat', False),
+                mlp_ratio=getattr(args, 'mlp_ratio', 4.0),
             )
         elif args.merging == 'padded': #i.e. 'padded'
             model_cls = partial(
@@ -299,7 +299,8 @@ def init_train_state(
                 prenorm=args.prenorm,
                 batchnorm=args.batchnorm,
                 bn_momentum=args.bn_momentum,
-                use_remat=getattr(args, 'use_remat', False),
+                mlp_ratio=getattr(args, 'mlp_ratio', 4.0),
+                #args not adding to partial: training & rescale.
             )
         else:
             raise ValueError("Merge method: " + args.merging + " is not valid (check spelling)")
@@ -307,7 +308,7 @@ def init_train_state(
     else:
         if args.num_devices > 1:
             raise NotImplementedError("Message only model not implemented for multi-device training")
-        
+
         model_cls = partial(
             BatchLobPredModel,
             ssm=ssm_init_fn,
@@ -321,6 +322,7 @@ def init_train_state(
             prenorm=args.prenorm,
             batchnorm=args.batchnorm,
             bn_momentum=args.bn_momentum,
+            mlp_ratio=getattr(args, 'mlp_ratio', 4.0),
         )
 
     # initialize training state
