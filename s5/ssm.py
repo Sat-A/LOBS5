@@ -8,7 +8,7 @@ from .ssm_init import init_CV, init_VinvB, init_log_steps, trunc_standard_normal
 
 
 # Discretization functions
-def discretize_bilinear(Lambda, B_tilde, Delta):Threepo
+def discretize_bilinear(Lambda, B_tilde, Delta):
     """ Discretize a diagonalized, continuous-time linear SSM
         using bilinear transform method.
         Args:
