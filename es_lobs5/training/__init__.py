@@ -1,22 +1,19 @@
 # ES training infrastructure for LOBS5
 """
-Training loop and fitness evaluation for ES-based LOBS5 training.
+ES training with JaxLOB for execution optimization.
 
-Two modes:
-1. es_train: Next-token prediction with cross-entropy fitness
-2. es_rl_train: RL with JaxLOB execution, PnL-based fitness
+Pure ES with step-by-step JaxLOB simulation:
+- World Model (frozen) generates background market order flow
+- Policy (ES trained) observes and generates trading actions
+- Fitness = total_revenue (PnL)
 """
 
-# Next-token prediction mode
-from .fitness import compute_fitness, cross_entropy_loss
-
-# PnL-based fitness for RL mode
+# PnL-based fitness
 from .fitness import (
     compute_pnl_fitness,
     compute_execution_fitness,
     compute_advantage_fitness,
 )
 
-# Training loops
-from .es_train import es_train, ESTrainer, create_es_config
-from .es_rl_train import es_rl_train, ESRLTrainer, create_esrl_config
+# ES training with JaxLOB
+from .es_jaxlob_train import es_jaxlob_train, ESJaxLOBTrainer, create_es_jaxlob_config

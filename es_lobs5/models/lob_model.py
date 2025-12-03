@@ -526,6 +526,100 @@ class ES_PaddedLobPredModel(Model):
 
         return (message_hiddens, book_hiddens, fused_hiddens, ema_state)
 
+    @classmethod
+    def _forward_step(cls, common_params: CommonParams, hiddens, x_m, x_b, resets=None):
+        """
+        Single-step forward pass for step-by-step episode simulation.
+
+        This is used for ES-JaxLOB training where we need to interleave
+        model inference with JaxLOB simulation step by step.
+
+        Args:
+            common_params: CommonParams with noiser and params
+            hiddens: Tuple of (message_hiddens, book_hiddens, fused_hiddens, ema_state)
+            x_m: Message tokens (L_step,) int32 - typically 24 tokens for one message
+            x_b: Book features (L_b_step, d_book) float - current book state
+            resets: Optional reset signals
+
+        Returns:
+            (new_hiddens, log_probs)
+            - new_hiddens: Updated hidden states
+            - log_probs: Log probabilities (L_step, d_output) for next token predictions
+        """
+        fp = common_params.frozen_params
+        message_hiddens, book_hiddens, fused_hiddens, ema_state = hiddens
+
+        # Message encoder RNN forward
+        msg_params = common_params._replace(
+            frozen_params=common_params.frozen_params.get('message_encoder', {}),
+            params=common_params.params['message_encoder'],
+            es_tree_key=common_params.es_tree_key['message_encoder'],
+        )
+        n_msg_layers = msg_params.frozen_params.get('n_layers', 0)
+
+        # Embedding lookup
+        embedding = call_submodule(ES_Parameter, 'embedding', msg_params)
+        x_m_emb = embedding[x_m.ravel()]  # (L_step, d_model)
+
+        # Message sequence layers (RNN mode)
+        new_message_hiddens = []
+        for i in range(n_msg_layers):
+            layer_params = msg_params._replace(
+                frozen_params=msg_params.frozen_params.get(f'layer_{i}', {}),
+                params=msg_params.params[f'layer_{i}'],
+                es_tree_key=msg_params.es_tree_key[f'layer_{i}'],
+            )
+            hidden_i, x_m_emb = ES_SequenceLayer._forward_rnn(
+                layer_params, message_hiddens[i], x_m_emb, resets
+            )
+            new_message_hiddens.append(hidden_i)
+
+        # Book encoder RNN forward
+        book_params = common_params._replace(
+            frozen_params=common_params.frozen_params.get('book_encoder', {}),
+            params=common_params.params['book_encoder'],
+            es_tree_key=common_params.es_tree_key['book_encoder'],
+        )
+        new_book_hiddens, x_b_enc = ES_LobBookModel._forward_rnn(
+            book_params, book_hiddens, x_b, resets
+        )
+
+        # Concatenate message and book features
+        # x_m_emb: (L_step, d_model), x_b_enc: (L_b_step, d_model)
+        # Need to broadcast/align - typically book features are expanded to match message length
+        if x_m_emb.shape[0] != x_b_enc.shape[0]:
+            # Repeat book features to match message length
+            x_b_enc = jnp.broadcast_to(x_b_enc[-1:], (x_m_emb.shape[0], x_b_enc.shape[-1]))
+
+        x_concat = jnp.concatenate([x_m_emb, x_b_enc], axis=-1)  # (L_step, 2*d_model)
+
+        # Fused encoder RNN forward
+        fused_params = common_params._replace(
+            frozen_params=common_params.frozen_params.get('fused_encoder', {}),
+            params=common_params.params['fused_encoder'],
+            es_tree_key=common_params.es_tree_key['fused_encoder'],
+        )
+        new_fused_hiddens, x_fused = ES_StackedEncoder._forward_rnn(
+            fused_params, fused_hiddens, x_concat, resets
+        )
+
+        # EMA pooling (optional, for single token prediction)
+        ema_val, ema_count = ema_state
+        alpha = 2.0 / (22 + 1.0)
+        new_ema_val = alpha * x_fused + (1 - alpha) * ema_val
+        new_ema_count = ema_count + 1
+        new_ema_state = (new_ema_val, new_ema_count)
+
+        # Decode
+        x_out = call_submodule(ES_Linear, 'decoder', common_params, x_fused)
+
+        # Log softmax in float32
+        x_out = x_out.astype(jnp.float32)
+        log_probs = jax.nn.log_softmax(x_out, axis=-1)
+
+        new_hiddens = (new_message_hiddens, new_book_hiddens, new_fused_hiddens, new_ema_state)
+        return new_hiddens, log_probs
+
 
 # =============================================================================
 # Helper Functions
