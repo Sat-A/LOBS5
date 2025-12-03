@@ -180,8 +180,8 @@ def main():
 
     # Compare speed ratio
     if bf_best > 0 and fp_best > 0:
-        speedup = fp_best / bf_best
-        print(f"\nSpeedup (FP32_best / BF16_best): {speedup:.3f}x")
+        speedup = bf_best / fp_best
+        print(f"\nSpeedup (BF16_best / FP32_best): {speedup:.3f}x")
     print("\nFinished.")
 
 if __name__ == "__main__":
