@@ -488,3 +488,86 @@ def load_params_for_es_trainer(
                           f"trainer={trainer_val}, checkpoint={ckpt_val}")
 
     return es_params, config
+
+
+class ESInitResult:
+    """
+    Result of loading checkpoint for ES training.
+
+    Mimics CommonInit structure with additional es_tree_key for ES noiser.
+    """
+    def __init__(self, params, frozen_params, es_map, es_tree_key):
+        self.params = params
+        self.frozen_params = frozen_params
+        self.es_map = es_map
+        self.es_tree_key = es_tree_key
+
+
+def load_checkpoint_for_es(
+    checkpoint_path: str,
+) -> Tuple['ESInitResult', Dict]:
+    """
+    Load and convert checkpoint for ES training with proper es_tree_key.
+
+    This is the main entry point for loading gradient-trained checkpoints
+    into ES-JaxLOB training. Returns an ESInitResult object that mimics
+    CommonInit structure.
+
+    Args:
+        checkpoint_path: Path to Orbax checkpoint directory
+
+    Returns:
+        Tuple of (ESInitResult, es_tree_key)
+        ESInitResult has .params, .frozen_params, .es_map attributes
+    """
+    from ..models.common import simple_es_tree_key, PARAM, EXCLUDED
+
+    # Load and convert
+    es_params, config = convert_and_load_checkpoint(checkpoint_path, return_config=True)
+
+    # Create es_map (mark all params as PARAM by default)
+    def create_es_map(params_tree):
+        """Create es_map tree with same structure as params, all marked as PARAM."""
+        if isinstance(params_tree, dict):
+            return {k: create_es_map(v) for k, v in params_tree.items()}
+        else:
+            return PARAM  # All trainable parameters
+
+    es_map = create_es_map(es_params)
+
+    # Create empty scan_map (same structure, all empty tuples)
+    def create_scan_map(params_tree):
+        if isinstance(params_tree, dict):
+            return {k: create_scan_map(v) for k, v in params_tree.items()}
+        else:
+            return ()  # Empty scan map for each param
+
+    scan_map = create_scan_map(es_params)
+
+    # Create es_tree_key using random base key
+    # The es_tree_key is used for parameter-specific randomness in ES noiser
+    base_key = jax.random.PRNGKey(0)  # Fixed seed for reproducibility
+    es_tree_key = simple_es_tree_key(es_params, base_key, scan_map)
+
+    # Extract frozen params from config
+    frozen_params = {
+        'd_output': config.get('d_output', config.get('vocab_size', 2112)),
+        'd_model': config.get('d_model', 256),
+        'd_book': config.get('d_book', 503),
+        'n_message_layers': config.get('n_message_layers', config.get('n_layers', 2)),
+        'n_fused_layers': config.get('n_fused_layers', 4),
+        'n_book_pre_layers': config.get('n_book_pre_layers', 1),
+        'n_book_post_layers': config.get('n_book_post_layers', 1),
+        'ssm_size': config.get('ssm_size', 256),
+        'conj_sym': config.get('conj_sym', True),
+        'mode': config.get('mode', 'ema'),
+    }
+
+    result = ESInitResult(
+        params=es_params,
+        frozen_params=frozen_params,
+        es_map=es_map,
+        es_tree_key=es_tree_key,
+    )
+
+    return result, es_tree_key

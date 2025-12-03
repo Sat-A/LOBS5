@@ -32,7 +32,7 @@ from typing import Tuple, Optional, NamedTuple, Dict, Any
 
 # Import centralized utilities
 from ..utils.import_utils import get_all_noisers
-from ..utils import convert_and_load_checkpoint
+from ..utils import load_checkpoint_for_es
 from ..models import ES_PaddedLobPredModel
 from ..models.common import CommonParams, simple_es_tree_key
 from .fitness import compute_pnl_fitness
@@ -94,9 +94,11 @@ def create_es_jaxlob_config():
     parser.add_argument('--world_msgs_per_step', type=int, default=10,
                         help='Background messages per step')
 
-    # Encoder and initial state
+    # Encoder (optional - created from Vocab if not provided)
     parser.add_argument('--encoder_path', type=str, default=None,
-                        help='Path to token encoder (if not in checkpoint)')
+                        help='Path to token encoder pickle file (created from Vocab if not provided)')
+
+    # Initial book state
     parser.add_argument('--init_book_path', type=str, default=None,
                         help='Path to initial book state (random if None)')
 
@@ -226,9 +228,8 @@ class ESJaxLOBTrainer:
 
         # Load LOBS5 checkpoint (same for both models)
         print(f"Loading LOBS5 checkpoint from {config.lobs5_checkpoint}")
-        self.lobs5_init, self.es_tree_key = convert_and_load_checkpoint(
+        self.lobs5_init, self.es_tree_key = load_checkpoint_for_es(
             config.lobs5_checkpoint,
-            return_config=False,
         )
 
         # Initialize noiser for Policy
@@ -265,9 +266,10 @@ class ESJaxLOBTrainer:
         _lazy_import_jaxlob()
         # Create OrderBook instance
         self.sim = OrderBook()
-        # Load encoder for token conversion
-        # This should be loaded from your preprocessed data
-        self.encoder = {}  # Placeholder - load actual encoder
+        # Create encoder from Vocab class
+        from lob.encoding import Vocab
+        vocab = Vocab()
+        self.encoder = vocab.ENCODING  # Dict[str, Tuple[jax.Array, jax.Array]]
 
     def create_world_common_params(self) -> CommonParams:
         """Create CommonParams for World Model (frozen, no noise)."""
