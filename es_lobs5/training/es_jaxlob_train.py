@@ -94,9 +94,13 @@ def create_es_jaxlob_config():
     parser.add_argument('--world_msgs_per_step', type=int, default=10,
                         help='Background messages per step')
 
-    # JaxLOB environment
-    parser.add_argument('--alphatrade_path', type=str, required=True,
-                        help='Path to AlphaTrade data')
+    # Encoder and initial state
+    parser.add_argument('--encoder_path', type=str, default=None,
+                        help='Path to token encoder (if not in checkpoint)')
+    parser.add_argument('--init_book_path', type=str, default=None,
+                        help='Path to initial book state (random if None)')
+
+    # Execution task
     parser.add_argument('--task', type=str, default='sell',
                         choices=['sell', 'buy'])
     parser.add_argument('--task_size', type=int, default=500,
