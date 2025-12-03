@@ -2,10 +2,10 @@ python run_train.py --USE_WANDB=True\
                     --wandb_entity='thesatyam-university-of-oxford' \
                     --wandb_project='lobster-padded-tiny-satyam' \
                     --C_init=trunc_standard_normal --prenorm=True --batchnorm=True --bidirectional=False \
-                    --blocks=4 --bsz=1 --d_model=64 --dataset=lobster-prediction --merging=padded\
-                    --dir_name='./data/GOOG/GOOG' --clip_eigs=True --activation_fn=half_glu1 \
+                    --blocks=16 --bsz=24 --d_model=512 --dataset=lobster-prediction --merging=padded\
+                    --dir_name='/lus/lfs1aip2/home/s5e/kangli.s5e/JAN2023/GOOG_24tok_encoded' --clip_eigs=True --activation_fn=half_glu1 \
                     --dt_global=False --epochs=2 --jax_seed=42 --lr_factor=1 --n_layers=3 \
-                    --opt_config=standard --p_dropout=0.0 --ssm_lr_base=0.0005 --ssm_size_base=256 \
+                    --opt_config=standard --p_dropout=0.0 --ssm_lr_base=0.0005 --ssm_size_base=512 \
                     --warmup_end=1 --weight_decay=0.05 --msg_seq_len=100 \
                     --use_book_data=True --use_simple_book=False --book_transform=True \
                     --masking=none \
