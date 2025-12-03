@@ -7,26 +7,40 @@ that works with the HyperscaleES noiser framework.
 The key challenge is handling complex-valued parameters (Lambda, B, C)
 which are stored as real tensors with shape (..., 2) for (real, imag).
 
-Based on: s5/ssm.py
+REUSES: Core SSM logic from s5/ssm.py (discretization, parallel scan, apply_ssm)
+ADDS: ES parameter wrapping via CommonParams and noiser injection
 """
 
 import jax
 import jax.numpy as jnp
-from jax.nn.initializers import lecun_normal, normal
+from jax.nn.initializers import lecun_normal
 from jax.numpy.linalg import eigh
-from functools import partial
 
 from .common import (
     Model, CommonInit, CommonParams,
-    PARAM, MM_PARAM, EXCLUDED,
-    merge_inits, merge_frozen, call_submodule,
-    ES_Parameter,
+    PARAM, EXCLUDED,
 )
+
+# Import SSM core functions from s5/ssm.py (no duplication!)
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
+from s5.ssm import (
+    discretize_zoh,
+    discretize_bilinear,
+    binary_operator,
+    binary_operator_reset,
+    apply_ssm,
+    apply_ssm_rnn,
+)
+# Import initialization helpers from s5/ssm_init.py
+from s5.ssm_init import init_CV, init_VinvB, init_log_steps
 
 __all__ = [
     'ES_S5SSM',
     'make_DPLR_HiPPO',
     'init_hippo_matrices',
+    # Re-export for convenience (but they come from s5/ssm.py)
     'discretize_zoh',
     'discretize_bilinear',
     'apply_ssm',
@@ -114,145 +128,6 @@ def init_hippo_matrices(ssm_size, blocks, conj_sym=True):
 
 
 # =============================================================================
-# Discretization Functions
-# =============================================================================
-
-def discretize_bilinear(Lambda, B_tilde, Delta):
-    """
-    Discretize continuous-time SSM using bilinear transform.
-
-    Args:
-        Lambda: diagonal state matrix eigenvalues (P,) complex
-        B_tilde: input matrix (P, H) complex
-        Delta: discretization step sizes (P,) real
-
-    Returns:
-        Lambda_bar, B_bar (discretized)
-    """
-    Identity = jnp.ones(Lambda.shape[0])
-    BL = 1 / (Identity - (Delta / 2.0) * Lambda)
-    Lambda_bar = BL * (Identity + (Delta / 2.0) * Lambda)
-    B_bar = (BL * Delta)[..., None] * B_tilde
-    return Lambda_bar, B_bar
-
-
-def discretize_zoh(Lambda, B_tilde, Delta):
-    """
-    Discretize continuous-time SSM using zero-order hold.
-
-    Args:
-        Lambda: diagonal state matrix eigenvalues (P,) complex
-        B_tilde: input matrix (P, H) complex
-        Delta: discretization step sizes (P,) real
-
-    Returns:
-        Lambda_bar, B_bar (discretized)
-    """
-    Identity = jnp.ones(Lambda.shape[0])
-    Lambda_bar = jnp.exp(Lambda * Delta)
-    B_bar = (1 / Lambda * (Lambda_bar - Identity))[..., None] * B_tilde
-    return Lambda_bar, B_bar
-
-
-# =============================================================================
-# Parallel Scan Operations
-# =============================================================================
-
-@jax.vmap
-def binary_operator(q_i, q_j):
-    """Binary operator for parallel scan of linear recurrence."""
-    A_i, b_i = q_i
-    A_j, b_j = q_j
-    return A_j * A_i, A_j * b_i + b_j
-
-
-def apply_ssm(Lambda_bar, B_bar, C_tilde, input_sequence, conj_sym, bidirectional):
-    """
-    Compute SSM output using parallel scan.
-
-    Args:
-        Lambda_bar: discretized diagonal state matrix (P,) complex
-        B_bar: discretized input matrix (P, H) complex
-        C_tilde: output matrix (H, P) complex
-        input_sequence: input (L, H) float
-        conj_sym: whether conjugate symmetry is enforced
-        bidirectional: whether to use bidirectional processing
-
-    Returns:
-        output sequence (L, H) float
-    """
-    Lambda_elements = Lambda_bar * jnp.ones((input_sequence.shape[0], Lambda_bar.shape[0]))
-    Bu_elements = jax.vmap(lambda u: B_bar @ u)(input_sequence)
-
-    _, xs = jax.lax.associative_scan(binary_operator, (Lambda_elements, Bu_elements))
-
-    if bidirectional:
-        _, xs2 = jax.lax.associative_scan(
-            binary_operator, (Lambda_elements, Bu_elements), reverse=True
-        )
-        xs = jnp.concatenate((xs, xs2), axis=-1)
-
-    if conj_sym:
-        return jax.vmap(lambda x: 2 * (C_tilde @ x).real)(xs)
-    else:
-        return jax.vmap(lambda x: (C_tilde @ x).real)(xs)
-
-
-# =============================================================================
-# Parameter Initialization Helpers
-# =============================================================================
-
-def init_log_steps(key, P, dt_min, dt_max):
-    """Initialize learnable timescale parameters."""
-    log_steps = []
-    for i in range(P):
-        key, skey = jax.random.split(key)
-        log_step = jax.random.uniform(skey, (1,)) * (
-            jnp.log(dt_max) - jnp.log(dt_min)
-        ) + jnp.log(dt_min)
-        log_steps.append(log_step)
-    return jnp.array(log_steps)
-
-
-def init_VinvB(key, shape, Vinv, dtype=jnp.float32):
-    """
-    Initialize B_tilde = V^{-1} @ B.
-
-    Returns tensor of shape (P, H, 2) storing real and imag parts.
-    """
-    P, H = shape
-    B = lecun_normal()(key, (P, H))
-    VinvB = Vinv @ B
-    VinvB_real = VinvB.real.astype(dtype)
-    VinvB_imag = VinvB.imag.astype(dtype)
-    return jnp.stack([VinvB_real, VinvB_imag], axis=-1)
-
-
-def init_CV(key, shape, V, dtype=jnp.float32):
-    """
-    Initialize C_tilde = C @ V.
-
-    Returns tensor of shape (H, P, 2) storing real and imag parts.
-    """
-    H, P = shape
-
-    # Sample C as (H, P, 2) with lecun_normal per row
-    Cs = []
-    for i in range(H):
-        key, skey = jax.random.split(key)
-        C_row = lecun_normal()(skey, (1, P, 2))
-        Cs.append(C_row)
-    C_ = jnp.concatenate(Cs, axis=0)  # (H, P, 2)
-
-    # Reconstruct complex and multiply by V
-    C = C_[..., 0] + 1j * C_[..., 1]
-    CV = C @ V
-    CV_real = CV.real.astype(dtype)
-    CV_imag = CV.imag.astype(dtype)
-    return jnp.stack([CV_real, CV_imag], axis=-1)
-
-
-# =============================================================================
 # ES_S5SSM Model
 # =============================================================================
 
@@ -315,22 +190,24 @@ class ES_S5SSM(Model):
 
         local_P = 2 * P if conj_sym else P
 
-        # Initialize B (input matrix)
-        B = init_VinvB(keys[0], (local_P, H), Vinv, dtype)
+        # Initialize B (input matrix) - use init_VinvB from s5/ssm_init.py
+        B = init_VinvB(lecun_normal(), keys[0], (local_P, H), Vinv).astype(dtype)
 
-        # Initialize C (output matrix)
+        # Initialize C (output matrix) - use init_CV/trunc_standard_normal from s5/ssm_init.py
         if bidirectional:
-            C_shape = (H, 2 * local_P)
+            C_shape = (H, 2 * local_P, 2)
         else:
-            C_shape = (H, local_P)
+            C_shape = (H, local_P, 2)
 
-        C = init_CV(keys[1], C_shape, V, dtype)
+        from s5.ssm_init import trunc_standard_normal
+        C = init_CV(trunc_standard_normal, keys[1], C_shape, V).astype(dtype)
 
         # Initialize D (feedthrough)
         D = (jax.random.normal(keys[2], (H,)) * 1.0).astype(dtype)
 
-        # Initialize log_step
-        log_step = init_log_steps(keys[3], P, dt_min, dt_max).astype(dtype)
+        # Initialize log_step - use init_log_steps from s5/ssm_init.py
+        # Note: init_log_steps expects (key, (P, dt_min, dt_max))
+        log_step = init_log_steps(keys[3], (P, dt_min, dt_max)).astype(dtype)
 
         # Build params dict
         params = {
@@ -443,6 +320,8 @@ class ES_S5SSM(Model):
         """
         Compute S5 SSM forward pass in RNN mode (step-by-step).
 
+        Uses apply_ssm_rnn from s5/ssm.py for the core computation.
+
         Args:
             common_params: CommonParams with noiser and params
             hidden: Hidden state (1, P) complex
@@ -489,52 +368,18 @@ class ES_S5SSM(Model):
         else:
             Lambda_bar, B_bar = discretize_bilinear(Lambda, B_tilde, step)
 
-        # RNN scan
-        Lambda_elements = Lambda_bar * jnp.ones((x.shape[0], Lambda_bar.shape[0]))
-        Bu_elements = jax.vmap(lambda u: B_bar @ u)(x.astype(jnp.float32))
+        # Cast input to float32 for SSM computation
+        input_dtype = x.dtype
+        x_fp32 = x.astype(jnp.float32)
 
-        # Prepend hidden state
-        Lambda_elements = jnp.concatenate([
-            jnp.ones((1, Lambda_bar.shape[0])),
-            Lambda_elements,
-        ])
-        Bu_elements = jnp.concatenate([hidden, Bu_elements])
-
-        if resets is not None:
-            # Handle resets with modified binary operator
-            resets = jnp.concatenate([jnp.zeros(1), resets])
-
-            @jax.vmap
-            def binary_operator_reset(q_i, q_j):
-                A_i, b_i, c_i = q_i
-                A_j, b_j, c_j = q_j
-                return (
-                    (A_j * A_i) * (1 - c_j) + A_j * c_j,
-                    (A_j * b_i + b_j) * (1 - c_j) + b_j * c_j,
-                    c_i * (1 - c_j) + c_j,
-                )
-
-            _, xs, _ = jax.lax.associative_scan(
-                binary_operator_reset,
-                (Lambda_elements, Bu_elements, resets)
-            )
-        else:
-            _, xs = jax.lax.associative_scan(
-                binary_operator, (Lambda_elements, Bu_elements)
-            )
-
-        # Extract hidden state and outputs
-        hidden_out = xs[jnp.newaxis, -1]
-        xs = xs[1:]
-
-        # Apply C matrix
-        if fp['conj_sym']:
-            ys = jax.vmap(lambda s: 2 * (C_tilde @ s).real)(xs)
-        else:
-            ys = jax.vmap(lambda s: (C_tilde @ s).real)(xs)
+        # Apply SSM RNN mode - uses apply_ssm_rnn from s5/ssm.py
+        hidden_out, ys = apply_ssm_rnn(
+            Lambda_bar, B_bar, C_tilde, hidden, x_fp32, resets,
+            fp['conj_sym'], fp['bidirectional']
+        )
 
         # Add feedthrough
-        Du = jax.vmap(lambda u: D * u)(x.astype(jnp.float32))
+        Du = jax.vmap(lambda u: D * u)(x_fp32)
         output = ys + Du
 
-        return hidden_out, output.astype(x.dtype)
+        return hidden_out, output.astype(input_dtype)

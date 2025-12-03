@@ -9,20 +9,52 @@ Imports most components from HyperscaleES, only adds S5-specific ones:
 import jax
 import jax.numpy as jnp
 
-# Import from HyperscaleES
+# Import from HyperscaleES - use importlib to avoid triggering rl.py import
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../HyperscaleES/src'))
+import importlib.util
 
-from hyperscalees.models.base_model import Model, CommonInit, CommonParams
-from hyperscalees.models.common import (
-    PARAM, MM_PARAM, EMB_PARAM, EXCLUDED,
-    merge_inits, merge_frozen, call_submodule,
-    simple_es_tree_key, recursive_scan_split,
-    layer_norm, ACTIVATIONS,
-    # Import ES primitives directly
-    Parameter, MM, TMM, Linear, Embedding,
+_hyperscalees_path = os.path.join(os.path.dirname(__file__), '../../HyperscaleES/src')
+sys.path.insert(0, _hyperscalees_path)
+
+# Load base_model directly without triggering __init__.py
+def _load_module(module_name, file_path):
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+_base_model = _load_module(
+    'hyperscalees.models.base_model',
+    os.path.join(_hyperscalees_path, 'hyperscalees/models/base_model.py')
 )
+_common = _load_module(
+    'hyperscalees.models.common',
+    os.path.join(_hyperscalees_path, 'hyperscalees/models/common.py')
+)
+
+# Extract what we need from loaded modules
+Model = _base_model.Model
+CommonInit = _base_model.CommonInit
+CommonParams = _base_model.CommonParams
+
+PARAM = _common.PARAM
+MM_PARAM = _common.MM_PARAM
+EMB_PARAM = _common.EMB_PARAM
+EXCLUDED = _common.EXCLUDED
+merge_inits = _common.merge_inits
+merge_frozen = _common.merge_frozen
+call_submodule = _common.call_submodule
+simple_es_tree_key = _common.simple_es_tree_key
+recursive_scan_split = _common.recursive_scan_split
+layer_norm = _common.layer_norm
+ACTIVATIONS = _common.ACTIVATIONS
+Parameter = _common.Parameter
+MM = _common.MM
+TMM = _common.TMM
+Linear = _common.Linear
+Embedding = _common.Embedding
 
 # Re-export HyperscaleES components with ES_ prefix for consistency
 ES_MM = MM

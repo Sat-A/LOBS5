@@ -87,10 +87,10 @@ class ES_SequenceLayer(Model):
         """
         keys = jax.random.split(key, 4)
 
-        # Compute actual P based on conj_sym
-        P = ssm_size // blocks
-        if conj_sym:
-            P = P // 2
+        # P is the Lambda size, which is already correctly sized from init_hippo_matrices
+        # For conj_sym=True: P = (ssm_size // blocks // 2) * blocks = ssm_size // 2
+        # Lambda_re_init already has this shape
+        P = Lambda_re_init.shape[0]
 
         # Initialize SSM
         ssm_init = ES_S5SSM.rand_init(
