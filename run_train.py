@@ -27,7 +27,7 @@ from lob.dataloading import Datasets
 if __name__ == "__main__":
 	import argparse
 	from s5.utils.util import str2bool
-	os.environ["CUDA_VISIBLE_DEVICES"] = "2,3,4,5,6,7"
+	os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2"
 	import time
 	time.sleep(1)
 	os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]="0.9"
