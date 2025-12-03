@@ -174,7 +174,7 @@ def _convert_message_encoder(flax_encoder: Dict, n_layers: int, activation: str)
         layers_1: {...}
 
     ES structure:
-        embedding: {params: (vocab, d_model)}
+        embedding: (vocab, d_model)  # Direct array for ES_Parameter
         layer_0: {...}
         layer_1: {...}
 
@@ -188,11 +188,9 @@ def _convert_message_encoder(flax_encoder: Dict, n_layers: int, activation: str)
     """
     result = {}
 
-    # Embedding layer
+    # Embedding layer - store directly as array for ES_Parameter
     if 'encoder' in flax_encoder and 'embedding' in flax_encoder['encoder']:
-        result['embedding'] = {
-            'params': jnp.asarray(flax_encoder['encoder']['embedding'])
-        }
+        result['embedding'] = jnp.asarray(flax_encoder['encoder']['embedding'])
 
     # Sequence layers: layers_i → layer_i
     for i in range(n_layers):
@@ -236,9 +234,8 @@ def _convert_stacked_encoder(flax_encoder: Dict, n_layers: int, activation: str)
             result['input_proj'] = _convert_dense_to_linear(flax_encoder['encoder'])
         elif 'embedding' in flax_encoder['encoder']:
             # This is actually a message encoder with embedding
-            result['embedding'] = {
-                'params': jnp.asarray(flax_encoder['encoder']['embedding'])
-            }
+            # Store directly as array for ES_Parameter
+            result['embedding'] = jnp.asarray(flax_encoder['encoder']['embedding'])
 
     # Sequence layers
     for i in range(n_layers):
@@ -549,18 +546,99 @@ def load_checkpoint_for_es(
     base_key = jax.random.PRNGKey(0)  # Fixed seed for reproducibility
     es_tree_key = simple_es_tree_key(es_params, base_key, scan_map)
 
-    # Extract frozen params from config
+    # Infer ssm_size from actual params (Lambda_re shape gives P)
+    # With conj_sym=True, hidden_size = P, ssm_size = 2*P
+    def infer_ssm_size(params):
+        """Infer SSM state size from actual param shapes."""
+        try:
+            # Look for Lambda_re in message_encoder layer_0 ssm
+            lambda_re = params['message_encoder']['layer_0']['ssm']['Lambda_re']
+            P = lambda_re.shape[0]  # This is the actual state size
+            # With conj_sym=True, hidden_size = P, so ssm_size = 2*P for compatibility
+            # But actually for initialize_carry, we use P directly as hidden_size
+            return P * 2  # Return ssm_size (which will be halved by conj_sym)
+        except (KeyError, AttributeError):
+            return config.get('ssm_size', 256)
+
+    inferred_ssm_size = infer_ssm_size(es_params)
+
+    # Extract config values with defaults
+    d_model = config.get('d_model', 256)
+    d_output = config.get('d_output', config.get('vocab_size', 2112))
+    d_book = config.get('d_book', 503)
+    n_message_layers = config.get('n_message_layers', config.get('n_layers', 2))
+    n_fused_layers = config.get('n_fused_layers', 4)
+    n_book_pre_layers = config.get('n_book_pre_layers', 1)
+    n_book_post_layers = config.get('n_book_post_layers', 1)
+    ssm_size = inferred_ssm_size  # Use inferred value from actual params
+    conj_sym = config.get('conj_sym', True)
+    activation = config.get('activation', 'half_glu1')
+
+    # Build nested frozen_params structure matching params structure
+    # This is what _forward_step and submodules expect
+    def build_ssm_frozen_params():
+        """Build frozen params for an SSM layer."""
+        return {
+            'conj_sym': conj_sym,
+            'clip_eigs': True,
+            'bidirectional': False,
+            'discretization': 'zoh',
+            'step_rescale': 1.0,
+        }
+
+    def build_layer_frozen_params():
+        """Build frozen params for a sequence layer."""
+        return {
+            'activation': activation,
+            'prenorm': True,
+            'd_model': d_model,
+            'ssm': build_ssm_frozen_params(),
+        }
+
+    # Message encoder frozen params
+    message_encoder_fp = {
+        'n_layers': n_message_layers,
+        'd_model': d_model,
+    }
+    for i in range(n_message_layers):
+        message_encoder_fp[f'layer_{i}'] = build_layer_frozen_params()
+
+    # Book encoder frozen params
+    book_encoder_fp = {
+        'n_pre_layers': n_book_pre_layers,
+        'n_post_layers': n_book_post_layers,
+        'd_book': d_book,
+        'd_model': d_model,
+    }
+    for i in range(n_book_pre_layers):
+        book_encoder_fp[f'pre_layer_{i}'] = build_layer_frozen_params()
+    for i in range(n_book_post_layers):
+        book_encoder_fp[f'post_layer_{i}'] = build_layer_frozen_params()
+
+    # Fused encoder frozen params
+    fused_encoder_fp = {
+        'n_layers': n_fused_layers,
+        'd_model': d_model,
+    }
+    for i in range(n_fused_layers):
+        fused_encoder_fp[f'layer_{i}'] = build_layer_frozen_params()
+
+    # Full nested frozen_params structure
     frozen_params = {
-        'd_output': config.get('d_output', config.get('vocab_size', 2112)),
-        'd_model': config.get('d_model', 256),
-        'd_book': config.get('d_book', 503),
-        'n_message_layers': config.get('n_message_layers', config.get('n_layers', 2)),
-        'n_fused_layers': config.get('n_fused_layers', 4),
-        'n_book_pre_layers': config.get('n_book_pre_layers', 1),
-        'n_book_post_layers': config.get('n_book_post_layers', 1),
-        'ssm_size': config.get('ssm_size', 256),
-        'conj_sym': config.get('conj_sym', True),
+        'd_output': d_output,
+        'd_model': d_model,
+        'd_book': d_book,
+        'n_message_layers': n_message_layers,
+        'n_fused_layers': n_fused_layers,
+        'n_book_pre_layers': n_book_pre_layers,
+        'n_book_post_layers': n_book_post_layers,
+        'ssm_size': ssm_size,
+        'conj_sym': conj_sym,
         'mode': config.get('mode', 'ema'),
+        # Nested structures for submodules
+        'message_encoder': message_encoder_fp,
+        'book_encoder': book_encoder_fp,
+        'fused_encoder': fused_encoder_fp,
     }
 
     result = ESInitResult(

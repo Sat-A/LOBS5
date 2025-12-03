@@ -324,7 +324,7 @@ class ES_S5SSM(Model):
 
         Args:
             common_params: CommonParams with noiser and params
-            hidden: Hidden state (1, P) complex
+            hidden: Hidden state (batch, 1, P) or (1, P) complex
             x: Input sequence (L, H) float
             resets: Optional reset signals (L,) bool
 
@@ -333,6 +333,12 @@ class ES_S5SSM(Model):
         """
         fp = common_params.frozen_params
         noiser = common_params.noiser
+
+        # Handle batch dimension: initialize_carry creates (batch, 1, P),
+        # but apply_ssm_rnn expects (1, P)
+        has_batch_dim = hidden.ndim == 3
+        if has_batch_dim:
+            hidden = hidden.squeeze(0)  # (batch=1, 1, P) → (1, P)
 
         # Get (potentially noisy) parameters (same as _forward)
         def get_param(name):
@@ -377,6 +383,10 @@ class ES_S5SSM(Model):
             Lambda_bar, B_bar, C_tilde, hidden, x_fp32, resets,
             fp['conj_sym'], fp['bidirectional']
         )
+
+        # Restore batch dimension if it was present
+        if has_batch_dim:
+            hidden_out = hidden_out[None, ...]  # (1, P) → (1, 1, P)
 
         # Add feedthrough
         Du = jax.vmap(lambda u: D * u)(x_fp32)
