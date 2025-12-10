@@ -249,16 +249,14 @@ class ESJaxLOBTrainer:
         NOISER = all_noisers[config.noiser]
 
         self.noiser_cls = NOISER
-        self.frozen_noiser_params = NOISER.get_frozen_noiser_params(
+        # Use HyperscaleES API: init_noiser returns (frozen_noiser_params, noiser_params)
+        self.frozen_noiser_params, self.noiser_params = NOISER.init_noiser(
             self.lobs5_init.params,
-            self.lobs5_init.es_map,
-            config.sigma,
-            lora_rank=config.lora_rank,
-        )
-        self.noiser_params = NOISER.get_noiser_params(
-            self.lobs5_init.params,
-            self.lobs5_init.es_map,
-            self.frozen_noiser_params,
+            sigma=config.sigma,
+            lr=config.lr,
+            rank=config.lora_rank,
+            freeze_nonlora=False,
+            noise_reuse=0,
         )
 
     def _init_jaxlob(self):
@@ -364,6 +362,8 @@ class ESJaxLOBTrainer:
                 hidden, log_probs = ES_PaddedLobPredModel._forward_step(
                     world_common_params, hidden, msg_hist[-msg_len:], book_f[None, :]
                 )
+                # Keep only the last position's hidden state for next iteration
+                hidden = jax.tree.map(lambda h: h[:, -1:, :], hidden)
 
                 # Sample next message tokens
                 world_msg = jax.random.categorical(sample_key, log_probs[-msg_len:])
@@ -397,6 +397,8 @@ class ESJaxLOBTrainer:
             hiddens_policy, log_probs = ES_PaddedLobPredModel._forward_step(
                 policy_common_params, hiddens_policy, msg_history[-msg_len:], book_feat[None, :]
             )
+            # Keep only the last position's hidden state for next iteration
+            hiddens_policy = jax.tree.map(lambda h: h[:, -1:, :], hiddens_policy)
 
             # Sample action tokens
             policy_msg = jax.random.categorical(sample_key, log_probs[-msg_len:])
@@ -424,13 +426,16 @@ class ESJaxLOBTrainer:
         )
 
         # Return PnL as fitness
-        return compute_pnl_fitness(final_state.total_revenue)
+        # TODO: Compute actual PnL from final_state.trades
+        # For now, use placeholder fitness (number of trades as proxy)
+        num_trades = jnp.sum(final_state.trades[:, 0] != -1)
+        return jnp.float32(num_trades)
 
     def eval_single_thread(
         self,
         key: jnp.ndarray,
-        epoch: int,
         thread_id: int,
+        epoch: int,
         initial_sim_state: 'LobState',
     ) -> float:
         """
@@ -438,8 +443,8 @@ class ESJaxLOBTrainer:
 
         Args:
             key: JAX random key
-            epoch: Current epoch
             thread_id: Thread ID for noise generation
+            epoch: Current epoch
             initial_sim_state: Initial JaxLOB state
 
         Returns:
@@ -495,7 +500,7 @@ class ESJaxLOBTrainer:
             self.frozen_noiser_params, self.noiser_params, fitnesses
         )
 
-        self.noiser_params, self.lobs5_init = self.noiser_cls.do_updates(
+        self.noiser_params, updated_params = self.noiser_cls.do_updates(
             self.frozen_noiser_params,
             self.noiser_params,
             self.lobs5_init.params,
@@ -504,6 +509,8 @@ class ESJaxLOBTrainer:
             iterinfos,
             self.lobs5_init.es_map,
         )
+        # Update only the params, keep the ESInitResult structure
+        self.lobs5_init.params = updated_params
 
         return jnp.mean(fitnesses), fitnesses
 
