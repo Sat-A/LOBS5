@@ -42,6 +42,7 @@ OrderBook = None
 LobState = None
 Message_Tokenizer = None
 encoding = None
+get_best_bid_and_ask = None  # From JaxOrderBookArrays
 
 all_noisers = get_all_noisers()
 
@@ -50,15 +51,17 @@ __all__ = ['ESJaxLOBTrainer', 'create_es_jaxlob_config', 'es_jaxlob_train']
 
 def _lazy_import_jaxlob():
     """Lazy import JaxLOB to avoid import errors when not using this mode."""
-    global OrderBook, LobState, Message_Tokenizer, encoding
+    global OrderBook, LobState, Message_Tokenizer, encoding, get_best_bid_and_ask
     if OrderBook is None:
         from gymnax_exchange.jaxob.jorderbook import OrderBook as _OrderBook, LobState as _LobState
+        from gymnax_exchange.jaxob.JaxOrderBookArrays import get_best_bid_and_ask as _get_best_bid_and_ask
         from lob.encoding import Message_Tokenizer as _Message_Tokenizer
         import lob.encoding as _encoding
         OrderBook = _OrderBook
         LobState = _LobState
         Message_Tokenizer = _Message_Tokenizer
         encoding = _encoding
+        get_best_bid_and_ask = _get_best_bid_and_ask
 
 
 class EpisodeState(NamedTuple):
@@ -271,13 +274,16 @@ def get_mid_price(sim_state: 'LobState', tick_size: int = 100) -> int:
     This ensures simulate_episode() never gets NaN mid_price.
     ============================================================
     """
+    _lazy_import_jaxlob()  # Ensure get_best_bid_and_ask is imported
     DEFAULT_MID = 10000  # Safe fallback
 
-    # Simplified - should extract from sim_state
-    best_bid = sim_state.best_bid if hasattr(sim_state, 'best_bid') else 100000
-    best_ask = sim_state.best_ask if hasattr(sim_state, 'best_ask') else 100100
+    # Extract best bid/ask from order book arrays using JaxLOB utility
+    # asks[:, 0] = prices (sorted ascending, -1 for empty slots)
+    # bids[:, 0] = prices (sorted descending, -1 for empty slots)
+    best_ask, best_bid = get_best_bid_and_ask(sim_state.asks, sim_state.bids)
 
     # Fault tolerance: check for invalid prices
+    # get_best_bid_and_ask returns 999999999 for empty asks, -1 for empty bids
     # Note: In JAX, we use jnp.where for branching within JIT
     bid_valid = (best_bid > 0) & (best_bid < 1000000)
     ask_valid = (best_ask > 0) & (best_ask < 1000000)
@@ -433,7 +439,19 @@ class ESJaxLOBTrainer:
         book_feat = extract_book_features(sim_state)
         order_id_counter = 0
 
-        def step_fn(carry, _):
+        # ============================================================
+        # POLICY ORDER ID TRACKING
+        # ============================================================
+        # Track initial mid price for PnL calculation
+        init_mid_price = get_mid_price(sim_state, config.tick_size)
+
+        # Policy order IDs follow a predictable pattern:
+        # Each step: world_msgs_per_step world orders, then 1 policy order
+        # So policy order IDs are: K, 2K+1, 3K+2, ... where K = world_msgs_per_step
+        # We can compute this at the end instead of tracking explicitly
+        # ============================================================
+
+        def step_fn(carry, step_idx):
             """Single step: World Model messages → Policy action."""
             (key, msg_history, hiddens_world, hiddens_policy,
              sim_state, book_feat, order_id) = carry
@@ -512,36 +530,21 @@ class ESJaxLOBTrainer:
             return (key, msg_history, hiddens_world, hiddens_policy, sim_state, book_feat, order_id), None
 
         # Run episode
-        (_, _, _, _, final_state, _, _), _ = jax.lax.scan(
+        (_, _, _, _, final_state, _, final_order_id), _ = jax.lax.scan(
             step_fn,
             (key, msg_history, hiddens_world, hiddens_policy, sim_state, book_feat, order_id_counter),
-            None,
+            jnp.arange(config.n_steps),  # Pass step indices
             length=config.n_steps,
         )
 
         # ============================================================
-        # Fitness Function (PLACEHOLDER - needs proper PnL computation)
+        # FITNESS FUNCTION: Real PnL Computation
         # ============================================================
         #
-        # Current implementation: Uses number of trades as temporary fitness
-        # - Purpose: Get the entire ES training pipeline working
-        # - Meaning: num_trades ≈ 100 means policy completed ~100 trades
-        #
-        # Intended Design: Fitness = PnL (Profit & Loss)
-        #
-        #   For sell task (sell 500 shares):
-        #     total_revenue = Σ(execution_price × quantity)
-        #     expected_revenue = initial_mid_price × total_quantity
-        #     PnL = total_revenue - expected_revenue
-        #
-        #     Goal: Maximize PnL (sell at higher prices)
-        #
-        #   For buy task:
-        #     total_cost = Σ(execution_price × quantity)
-        #     expected_cost = initial_mid_price × total_quantity
-        #     PnL = expected_cost - total_cost
-        #
-        #     Goal: Maximize PnL (buy at lower prices)
+        # Policy Order ID Pattern:
+        #   Each step generates: world_msgs_per_step world orders + 1 policy order
+        #   Policy order IDs: K, 2K+1, 3K+2, ... where K = world_msgs_per_step
+        #   Formula: policy_order_id[i] = i * (K + 1) + K
         #
         # Trades array structure (nTrades, 6):
         #   trades[:, 0]: execution_price
@@ -550,19 +553,78 @@ class ESJaxLOBTrainer:
         #   trades[:, 3]: seller_order_id
         #   trades[:, 4]: timestamp_seconds
         #   trades[:, 5]: timestamp_nanoseconds
-        #
-        # TODO: Implement real PnL computation:
-        #   1. Extract valid trades from final_state.trades (price != -1)
-        #   2. Compute total_revenue or total_cost
-        #   3. Get initial mid_price from initial_sim_state
-        #   4. Calculate PnL = revenue - expected_revenue
-        #   5. Optional: Add slippage penalty, VWAP deviation, etc.
-        #
         # ============================================================
 
-        # PLACEHOLDER: Use number of trades as fitness (temporary)
-        num_trades = jnp.sum(final_state.trades[:, 0] != -1)
-        fitness = jnp.float32(num_trades)
+        trades = final_state.trades
+        K = config.world_msgs_per_step
+
+        # Generate policy order IDs: K, 2K+1, 3K+2, ...
+        step_indices = jnp.arange(config.n_steps)
+        policy_order_ids = step_indices * (K + 1) + K  # shape: (n_steps,)
+
+        # Valid trades mask (price != -1)
+        valid_trades_mask = trades[:, 0] != -1
+
+        # Check if trade involves policy as seller (for sell task)
+        # trades[:, 3] = seller_order_id
+        seller_ids = trades[:, 3]
+        is_policy_seller = jnp.isin(seller_ids, policy_order_ids) & valid_trades_mask
+
+        # Check if trade involves policy as buyer (for buy task)
+        # trades[:, 2] = buyer_order_id
+        buyer_ids = trades[:, 2]
+        is_policy_buyer = jnp.isin(buyer_ids, policy_order_ids) & valid_trades_mask
+
+        # Compute metrics for both sell and buy scenarios
+        # Sell task: policy is seller, revenue = price * qty
+        sell_revenue = jnp.sum(
+            jnp.where(is_policy_seller, trades[:, 0] * trades[:, 1], 0)
+        )
+        sell_quantity = jnp.sum(
+            jnp.where(is_policy_seller, trades[:, 1], 0)
+        )
+
+        # Buy task: policy is buyer, cost = price * qty
+        buy_cost = jnp.sum(
+            jnp.where(is_policy_buyer, trades[:, 0] * trades[:, 1], 0)
+        )
+        buy_quantity = jnp.sum(
+            jnp.where(is_policy_buyer, trades[:, 1], 0)
+        )
+
+        # Total agent quantity (either as seller or buyer)
+        agent_quantity = sell_quantity + buy_quantity
+
+        # Compute PnL based on task type
+        # For now, assume sell task (policy wants to sell shares at high prices)
+        # PnL = revenue - expected_revenue = revenue - (init_mid_price * quantity)
+        # Normalized by 1e6 to keep fitness in reasonable range
+
+        # Expected revenue/cost at mid price
+        expected_value = init_mid_price * agent_quantity
+
+        # For sell task: higher revenue = better
+        # PnL = (actual_revenue - expected_revenue) / 1e6
+        sell_pnl = (sell_revenue - init_mid_price * sell_quantity) / 1e6
+
+        # For buy task: lower cost = better
+        # PnL = (expected_cost - actual_cost) / 1e6
+        buy_pnl = (init_mid_price * buy_quantity - buy_cost) / 1e6
+
+        # Combined PnL (both sell and buy activities contribute)
+        pnl = sell_pnl + buy_pnl
+
+        # Also compute total trade count for monitoring
+        total_trades = jnp.sum(valid_trades_mask)
+        agent_trades = jnp.sum(is_policy_seller | is_policy_buyer)
+
+        # Use PnL as fitness, with trade count as fallback if no trades
+        # If no agent trades, use a small penalty to encourage trading
+        fitness = jnp.where(
+            agent_quantity > 0,
+            pnl,
+            -0.1  # Small penalty for no trades (not too harsh)
+        )
 
         # ============================================================
         # FAULT TOLERANCE: Handle NaN/Inf in fitness
@@ -712,15 +774,46 @@ class ESJaxLOBTrainer:
             if mean_fitness > best_fitness:
                 best_fitness = mean_fitness
 
-            # Log to W&B
+            # Log to W&B with extended metrics
             if wandb_run:
+                # Basic fitness metrics
+                fitness_std = float(jnp.std(fitnesses))
+                fitness_max = float(jnp.max(fitnesses))
+                fitness_min = float(jnp.min(fitnesses))
+
+                # Fitness distribution percentiles
+                fitness_sorted = jnp.sort(fitnesses)
+                n = len(fitness_sorted)
+                p25 = float(fitness_sorted[n // 4])
+                p50 = float(fitness_sorted[n // 2])  # median
+                p75 = float(fitness_sorted[3 * n // 4])
+
+                # Count of positive/negative fitness (for PnL interpretation)
+                n_positive = int(jnp.sum(fitnesses > 0))
+                n_negative = int(jnp.sum(fitnesses < 0))
+                n_zero = int(jnp.sum(fitnesses == 0))
+
                 wandb_run.log({
+                    # Epoch info
                     'epoch': epoch,
-                    'mean_fitness': float(mean_fitness),
-                    'best_fitness': float(best_fitness),
-                    'fitness_std': float(jnp.std(fitnesses)),
-                    'max_fitness': float(jnp.max(fitnesses)),
-                    'min_fitness': float(jnp.min(fitnesses)),
+
+                    # Fitness summary
+                    'fitness/mean': float(mean_fitness),
+                    'fitness/best_ever': float(best_fitness),
+                    'fitness/std': fitness_std,
+                    'fitness/max': fitness_max,
+                    'fitness/min': fitness_min,
+
+                    # Fitness distribution
+                    'fitness/p25': p25,
+                    'fitness/median': p50,
+                    'fitness/p75': p75,
+
+                    # PnL breakdown
+                    'pnl/n_positive': n_positive,
+                    'pnl/n_negative': n_negative,
+                    'pnl/n_zero': n_zero,
+                    'pnl/positive_ratio': n_positive / n if n > 0 else 0,
                 })
 
             if epoch % 10 == 0:
