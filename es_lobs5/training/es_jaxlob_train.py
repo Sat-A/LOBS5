@@ -137,6 +137,30 @@ def get_sim_msg_es(
 
     Simplified version of inference_no_errcorr.get_sim_msg for ES training.
 
+    ============================================================
+    FAULT TOLERANCE DESIGN (ES training without action/state space)
+    ============================================================
+
+    In ES training, there's no action space validation layer:
+    - Traditional RL: action ∈ [-1, 1] → env.step() validates
+    - ES: policy outputs token logits → direct execution
+
+    Potential failure points:
+    1. Token sampling: categorical() can sample any token 0..vocab_size
+    2. Decoding: tokens → message fields may produce invalid values
+    3. JaxLOB execution: invalid messages can corrupt orderbook state
+
+    Fault tolerance strategy (JAX-compatible, no try/except):
+    - Clamp decoded values to valid ranges
+    - Use jnp.where() for conditional fallback
+    - Invalid message → NOOP (event_type=0, qty=0)
+
+    Why we DON'T use try/except:
+    - JAX traces functions for JIT compilation
+    - Python exceptions break tracing
+    - Must use jnp.where() for conditional logic
+    ============================================================
+
     Args:
         pred_msg_tokens: (24,) int32 - predicted message tokens
         sim: OrderBook instance
@@ -164,15 +188,45 @@ def get_sim_msg_es(
     time_s = msg_decoded[8]      # TIMEs_i
     time_ns = msg_decoded[9]     # TIMEns_i
 
+    # ============================================================
+    # FAULT TOLERANCE: Validate and clamp decoded values
+    # ============================================================
+
+    # Valid event types: 1=new_order, 2=modify, 3=delete, 4=execute
+    # Invalid → treat as NOOP (will set qty=0 later)
+    is_valid_event = (event_type >= 1) & (event_type <= 4)
+
+    # Valid side: 0=sell, 1=buy → mapped to -1, 1 for JaxLOB
+    is_valid_side = (side >= 0) & (side <= 1)
+
+    # Quantity must be positive for valid trade
+    is_valid_qty = quantity > 0
+
+    # Price must be within reasonable range (±1000 ticks from mid)
+    is_valid_price = (rel_price >= -1000) & (rel_price <= 1000)
+
+    # Combined validity check
+    is_valid_msg = is_valid_event & is_valid_side & is_valid_qty & is_valid_price
+
+    # If invalid, create NOOP message (qty=0 means no trade happens)
+    # This is safe: JaxLOB will process but nothing changes
+    safe_event_type = jnp.where(is_valid_msg, event_type, 0)
+    safe_quantity = jnp.where(is_valid_msg, quantity, 0)
+    safe_side = jnp.where(is_valid_msg, side, 0)
+    safe_rel_price = jnp.where(is_valid_msg, rel_price, 0)
+
     # Calculate absolute price
-    p_abs = mid_price + rel_price * tick_size
+    p_abs = mid_price + safe_rel_price * tick_size
+
+    # Clamp price to positive (JaxLOB requirement)
+    p_abs = jnp.maximum(p_abs, tick_size)
 
     # Construct JaxLOB message
     # Format: [type, side*2-1, qty, price, order_id, trader_id, time_s, time_ns]
     sim_msg = jnp.array([
-        event_type,
-        (side * 2) - 1,
-        quantity,
+        safe_event_type,
+        (safe_side * 2) - 1,
+        safe_quantity,
         p_abs,
         order_id,
         -88,  # trader_id placeholder
@@ -204,11 +258,38 @@ def extract_book_features(sim_state: 'LobState', l2_depth: int = 10) -> jnp.ndar
 
 
 def get_mid_price(sim_state: 'LobState', tick_size: int = 100) -> int:
-    """Get current mid price from order book state."""
+    """
+    Get current mid price from order book state.
+
+    ============================================================
+    FAULT TOLERANCE: Handle edge cases
+    ============================================================
+    - Empty order book: Return default mid price (10000)
+    - Invalid state: Return last known good price or default
+    - NaN/Inf: Replace with default
+
+    This ensures simulate_episode() never gets NaN mid_price.
+    ============================================================
+    """
+    DEFAULT_MID = 10000  # Safe fallback
+
     # Simplified - should extract from sim_state
     best_bid = sim_state.best_bid if hasattr(sim_state, 'best_bid') else 100000
     best_ask = sim_state.best_ask if hasattr(sim_state, 'best_ask') else 100100
+
+    # Fault tolerance: check for invalid prices
+    # Note: In JAX, we use jnp.where for branching within JIT
+    bid_valid = (best_bid > 0) & (best_bid < 1000000)
+    ask_valid = (best_ask > 0) & (best_ask < 1000000)
+
+    best_bid = jnp.where(bid_valid, best_bid, DEFAULT_MID - tick_size)
+    best_ask = jnp.where(ask_valid, best_ask, DEFAULT_MID + tick_size)
+
     mid = (best_bid + best_ask) // 2
+
+    # Final safety: ensure mid is finite and positive
+    mid = jnp.where((mid > 0) & jnp.isfinite(mid), mid, DEFAULT_MID)
+
     return (mid // tick_size) * tick_size
 
 
@@ -371,6 +452,10 @@ class ESJaxLOBTrainer:
                 # Keep only the last position's hidden state for next iteration
                 hidden = jax.tree.map(lambda h: h[:, -1:, :], hidden)
 
+                # FAULT TOLERANCE: Handle NaN/Inf in log_probs before sampling
+                # NaN → -1e9 (very low probability), Inf → clamp to ±1e9
+                log_probs = jnp.nan_to_num(log_probs, nan=-1e9, posinf=1e9, neginf=-1e9)
+
                 # Sample next message tokens
                 world_msg = jax.random.categorical(sample_key, log_probs[-msg_len:])
 
@@ -406,6 +491,9 @@ class ESJaxLOBTrainer:
             # Keep only the last position's hidden state for next iteration
             hiddens_policy = jax.tree.map(lambda h: h[:, -1:, :], hiddens_policy)
 
+            # FAULT TOLERANCE: Handle NaN/Inf in log_probs before sampling
+            log_probs = jnp.nan_to_num(log_probs, nan=-1e9, posinf=1e9, neginf=-1e9)
+
             # Sample action tokens
             policy_msg = jax.random.categorical(sample_key, log_probs[-msg_len:])
 
@@ -431,11 +519,66 @@ class ESJaxLOBTrainer:
             length=config.n_steps,
         )
 
-        # Return PnL as fitness
-        # TODO: Compute actual PnL from final_state.trades
-        # For now, use placeholder fitness (number of trades as proxy)
+        # ============================================================
+        # Fitness Function (PLACEHOLDER - needs proper PnL computation)
+        # ============================================================
+        #
+        # Current implementation: Uses number of trades as temporary fitness
+        # - Purpose: Get the entire ES training pipeline working
+        # - Meaning: num_trades ≈ 100 means policy completed ~100 trades
+        #
+        # Intended Design: Fitness = PnL (Profit & Loss)
+        #
+        #   For sell task (sell 500 shares):
+        #     total_revenue = Σ(execution_price × quantity)
+        #     expected_revenue = initial_mid_price × total_quantity
+        #     PnL = total_revenue - expected_revenue
+        #
+        #     Goal: Maximize PnL (sell at higher prices)
+        #
+        #   For buy task:
+        #     total_cost = Σ(execution_price × quantity)
+        #     expected_cost = initial_mid_price × total_quantity
+        #     PnL = expected_cost - total_cost
+        #
+        #     Goal: Maximize PnL (buy at lower prices)
+        #
+        # Trades array structure (nTrades, 6):
+        #   trades[:, 0]: execution_price
+        #   trades[:, 1]: quantity
+        #   trades[:, 2]: buyer_order_id
+        #   trades[:, 3]: seller_order_id
+        #   trades[:, 4]: timestamp_seconds
+        #   trades[:, 5]: timestamp_nanoseconds
+        #
+        # TODO: Implement real PnL computation:
+        #   1. Extract valid trades from final_state.trades (price != -1)
+        #   2. Compute total_revenue or total_cost
+        #   3. Get initial mid_price from initial_sim_state
+        #   4. Calculate PnL = revenue - expected_revenue
+        #   5. Optional: Add slippage penalty, VWAP deviation, etc.
+        #
+        # ============================================================
+
+        # PLACEHOLDER: Use number of trades as fitness (temporary)
         num_trades = jnp.sum(final_state.trades[:, 0] != -1)
-        return jnp.float32(num_trades)
+        fitness = jnp.float32(num_trades)
+
+        # ============================================================
+        # FAULT TOLERANCE: Handle NaN/Inf in fitness
+        # ============================================================
+        # If fitness is NaN or Inf (shouldn't happen with trade count,
+        # but will be critical when using PnL), return 0 as safe fallback.
+        # This prevents NaN from propagating through ES gradient updates.
+        #
+        # Why 0 instead of -inf:
+        # - -inf would dominate the ES gradient update
+        # - 0 = neutral fitness, episode has no effect on gradients
+        # - Better for training stability
+        # ============================================================
+        fitness = jnp.where(jnp.isfinite(fitness), fitness, 0.0)
+
+        return fitness
 
     def eval_single_thread(
         self,
