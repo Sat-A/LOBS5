@@ -114,6 +114,12 @@ def create_es_jaxlob_config():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--output_dir', type=str, default='./es_jaxlob_checkpoints')
 
+    # W&B logging
+    parser.add_argument('--wandb_project', type=str, default=None,
+                        help='Weights & Biases project name')
+    parser.add_argument('--wandb_entity', type=str, default=None,
+                        help='Weights & Biases entity/username')
+
     return parser
 
 
@@ -527,6 +533,26 @@ class ESJaxLOBTrainer:
         n_epochs = n_epochs or self.config.n_epochs
         key = jax.random.PRNGKey(self.config.seed)
 
+        # Initialize W&B if configured
+        wandb_run = None
+        if hasattr(self.config, 'wandb_project') and self.config.wandb_project:
+            import wandb
+            wandb_run = wandb.init(
+                project=self.config.wandb_project,
+                entity=self.config.wandb_entity,
+                name=f"es_jaxlob_n{self.config.n_threads}_s{self.config.seed}",
+                config={
+                    'n_threads': self.config.n_threads,
+                    'n_steps': self.config.n_steps,
+                    'noiser': self.config.noiser,
+                    'sigma': self.config.sigma,
+                    'lr': self.config.lr,
+                    'lora_rank': self.config.lora_rank,
+                    'checkpoint': self.config.lobs5_checkpoint,
+                }
+            )
+            print(f"W&B initialized: {wandb_run.url}")
+
         # Get initial JaxLOB state
         # In practice, load from your data
         initial_sim_state = self.sim.reset()  # Placeholder
@@ -543,9 +569,23 @@ class ESJaxLOBTrainer:
             if mean_fitness > best_fitness:
                 best_fitness = mean_fitness
 
+            # Log to W&B
+            if wandb_run:
+                wandb_run.log({
+                    'epoch': epoch,
+                    'mean_fitness': float(mean_fitness),
+                    'best_fitness': float(best_fitness),
+                    'fitness_std': float(jnp.std(fitnesses)),
+                    'max_fitness': float(jnp.max(fitnesses)),
+                    'min_fitness': float(jnp.min(fitnesses)),
+                })
+
             if epoch % 10 == 0:
                 print(f"Epoch {epoch}: mean_fitness={mean_fitness:.4f}, "
                       f"best={best_fitness:.4f}, std={jnp.std(fitnesses):.4f}")
+
+        if wandb_run:
+            wandb_run.finish()
 
         return self.lobs5_init.params
 
